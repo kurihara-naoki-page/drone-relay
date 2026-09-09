@@ -472,7 +472,21 @@ function droneUpdate(d, dt) {
 }
 
 // ---- 進行 -----------------------------------------------------------
-function gameOver() { S.over = true; S.overT = 0; Snd.over(); }
+// 最高記録 (端末に保存・外部通信なし)。届けた数で比べる。読めない環境 (保存を止めたブラウザ等) では黙って無効
+const BEST_KEY = 'droneRelay.best';
+function loadBest() {
+  try { const v = JSON.parse(localStorage.getItem(BEST_KEY)); return v && typeof v.delivered === 'number' ? v : null; }
+  catch (e) { return null; }
+}
+function saveBest(v) { try { localStorage.setItem(BEST_KEY, JSON.stringify(v)); } catch (e) {} }
+function gameOver() {
+  S.over = true; S.overT = 0;
+  const prev = loadBest();
+  S.record = !prev || S.delivered > prev.delivered;   // 今回が最高 (同点は更新しない)
+  S.best = S.record ? S.delivered : prev.delivered;
+  if (S.record) saveBest({ delivered: S.delivered, week: S.week, at: Date.now() });
+  Snd.over();
+}
 function update(dt) {
   S.flash = Math.max(0, S.flash - dt);
   S.rangeT = Math.max(0, S.rangeT - dt);
@@ -635,6 +649,11 @@ function rr(x, y, w, h, r) {
   ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
 }
 function circle(x, y, r) { ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); }
+function star(x, y, r) {               // 最高記録の印 (文字なし)
+  ctx.beginPath();
+  for (let i = 0; i < 10; i++) { const a = -Math.PI / 2 + i * Math.PI / 5, k = i % 2 ? r * 0.45 : r; ctx.lineTo(x + Math.cos(a) * k, y + Math.sin(a) * k); }
+  ctx.closePath();
+}
 function text(str, x, y, size, color, align, bold) {
   ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.font = (bold ? 'bold ' : '') + (size * scale) + 'px system-ui, -apple-system, "Segoe UI", sans-serif';
@@ -1045,8 +1064,15 @@ function drawOver() {
   ctx.globalAlpha = a;
   drawPackage(50 - 4.5, 22, 4.2, 'mail');
   text(String(S.delivered), 50 - 1.2, 22.2, 8, '#ffffff', 'left', true);
+  // 最高記録: 星と数字。今回が最高なら金色でふくらむ (数字は同じ値)。過去の記録が上なら白く小さく
+  if (S.best != null) {
+    const rec = S.record, k = rec ? 1 + 0.18 * Math.max(0, Math.sin(S.overT * 5)) : 1;
+    ctx.fillStyle = rec ? '#f2c14e' : 'rgba(255,255,255,0.75)';
+    star(50 - 2.6, 30.2, 1.35 * k); ctx.fill();
+    text(String(S.best), 50 - 0.6, 30.3, 3.6 * k, rec ? '#f2c14e' : 'rgba(255,255,255,0.75)', 'left', true);
+  }
   // やり直しの印 (円弧と矢じり)
-  const cx = 50, cy = 36;
+  const cx = 50, cy = 38.5;
   ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 0.7; ctx.lineCap = 'round';
   ctx.beginPath(); ctx.arc(cx, cy, 3, -Math.PI * 0.35, Math.PI * 1.35); ctx.stroke();
   ctx.fillStyle = '#ffffff';
