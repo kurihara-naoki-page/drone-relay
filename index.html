@@ -1112,9 +1112,9 @@ function drawMiniRange(x, y, r, alpha) {
 function drawInfoPanel0(now) {
   const t = now % 4.4;
   const src = { goods: 'mail', x: -6.5, y: 4.5, reach: true, on: true, kind: 'src' };
-  const B = { x: 5.5, y: -3.5, build: 0 }, house = { x: 7.2, y: 5.2 };
+  const B = { x: 5.0, y: -2.0, build: 0 }, house = { x: 7.5, y: 2.0 };   // 家はハブの円の中 (円の中の家にだけ届く、という本編のルールと揃える)
   const drag = easeOut((t - 0.5) / 1.0), linked = t >= 1.5;
-  drawMiniRange(B.x, B.y, 5.4, linked ? 1 : 0.35);
+  drawMiniRange(B.x, B.y, 6.0, linked ? 1 : 0.35);
   if (t >= 0.5) {                      // 引いている最中は青い点線・指先に点。離すと空路 (実線)
     const tip = { x: src.x + (B.x - src.x) * drag, y: src.y + (B.y - src.y) * drag };
     if (linked) { ctx.strokeStyle = C.road; ctx.lineWidth = 0.45; ctx.beginPath(); ctx.moveTo(src.x, src.y); ctx.lineTo(B.x, B.y); ctx.stroke(); }
@@ -1127,8 +1127,8 @@ function drawInfoPanel0(now) {
   const d = { bob: 0, carrying: true, order: { kind: 'mail' } };
   if (t < 1.7) drawDrone(d, now, src.x, src.y - 4.3, true);
   else if (t < 2.6) { const k = easeOut((t - 1.7) / 0.9); drawDrone(d, now, src.x + (B.x - src.x) * k, src.y - 4.3 + (B.y - src.y + 4.3) * k, false); }
-  else if (t < 3.35) { const k = easeOut((t - 2.6) / 0.75); drawDrone(d, now, B.x + (house.x - 1.6 - B.x) * k, B.y + (house.y - 1.6 - B.y) * k, false); }
-  else { d.carrying = false; drawDrone(d, now, house.x - 1.6, house.y - 1.6, true); }
+  else if (t < 3.35) { const k = easeOut((t - 2.6) / 0.75); drawDrone(d, now, B.x + (house.x - 2.4 - B.x) * k, B.y + (house.y - 0.3 - B.y) * k, false); }
+  else { d.carrying = false; drawDrone(d, now, house.x - 2.4, house.y - 0.3, true); }
   const ta = t < 0.5 ? clamp01((t - 0.2) / 0.3) : t < 1.5 ? 1 : clamp01(1 - (t - 1.5) / 0.3);
   drawTouch(src.x + (B.x - src.x) * drag, src.y + (B.y - src.y) * drag, ta);
 }
