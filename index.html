@@ -539,7 +539,7 @@ function chooseReward(which) {
 let ptr = null, lastTap = null;
 const HUD_H = 6.2;                     // 上の帯の高さ (ここへハブを運ぶと手持ちに戻る)
 const BTN = { info: { x: 87.6, y: 3.3, r: 2.1 }, pause: { x: 92.3, y: 3.3, r: 2.1 }, speed: { x: 97.0, y: 3.3, r: 2.1 } };
-const INFO_LINK = { x: 50, y: 30.6, w: 28, h: 5.5 };   // 小窓の中のリンク (Privacy Policy) の当たり
+const INFO_LINK = { x: 50, y: 42.6, w: 28, h: 5.5 };   // 小窓の中のリンク (Privacy Policy) の当たり
 const CARD = { drone: { x: 38, y: 31, w: 18, h: 16 }, tool: { x: 62, y: 31, w: 18, h: 16 } };
 function hitNode(p, rad) {
   let best = null, bd = Infinity;
@@ -1081,12 +1081,113 @@ function drawReward(now) {
     else drawToolIcon(S.rewardTool, c.x, c.y - 0.5, now);
   }
 }
-// 小窓。文字なし方針の唯一の例外 = 英語1行 (ポータルが求める「プライバシーポリシーの入口」。2026-09-09 本人裁定)
-function drawInfo() {
+// 小窓 = 「このゲームについて」。i の記号は「案内」を約束するので、中身が Privacy Policy だけでは看板違い (2026-09-10 外部レビューの指摘で改修)
+// 上に絵だけの遊び方3コマ (動く・文字なし)、下に Privacy Policy の1行 (文字なし方針の唯一の例外。ポータルが求める入口。2026-09-09 本人裁定)
+const INFO_BOX = { x: 13, y: 9.5, w: 74, h: 37.5 };
+const INFO_PANEL = { xs: [26, 50, 74], y: 26.5, w: 22, h: 21 };   // 3コマの中心と大きさ
+const clamp01 = k => Math.max(0, Math.min(1, k));
+const easeOut = k => 1 - Math.pow(1 - clamp01(k), 3);
+function drawTouch(x, y, a) {          // 指 (押している場所) の印
+  if (a <= 0) return;
+  ctx.fillStyle = 'rgba(59,63,71,' + (0.22 * a) + ')'; circle(x, y, 1.15); ctx.fill();
+  ctx.strokeStyle = 'rgba(59,63,71,' + (0.75 * a) + ')'; ctx.lineWidth = 0.22; circle(x, y, 1.15); ctx.stroke();
+}
+function drawMiniHouse(x, y, served) { // 小窓用の家 (本編の drawHouse と同じ見た目。届かない家は色を抜いて点線の枠)
+  ctx.save(); ctx.translate(x, y);
+  if (served) {
+    ctx.fillStyle = C.house; rr(-1.2, -0.9, 2.4, 2.1, 0.5); ctx.fill();
+    ctx.strokeStyle = C.houseLine; ctx.lineWidth = 0.25; ctx.stroke(); ctx.fillStyle = C.roof;
+  } else {
+    ctx.fillStyle = '#ece6da'; rr(-1.2, -0.9, 2.4, 2.1, 0.5); ctx.fill();
+    ctx.strokeStyle = '#a89d8c'; ctx.lineWidth = 0.22; ctx.setLineDash([0.5, 0.4]); ctx.stroke(); ctx.setLineDash([]); ctx.fillStyle = '#d3cbbd';
+  }
+  ctx.beginPath(); ctx.moveTo(-1.45, -0.8); ctx.lineTo(0, -1.9); ctx.lineTo(1.45, -0.8); ctx.closePath(); ctx.fill();
+  ctx.restore();
+}
+function drawMiniRange(x, y, r, alpha) {
+  ctx.fillStyle = C.range + (0.10 * alpha) + ')'; circle(x, y, r); ctx.fill();
+  ctx.strokeStyle = C.range + (0.45 * alpha) + ')'; ctx.lineWidth = 0.2; ctx.stroke();
+}
+// コマ1: 供給元からハブへ指を引くと空路がつながり、ドローンが荷物を家へ届ける (線を引く操作 = 遊びの中心)
+function drawInfoPanel0(now) {
+  const t = now % 4.4;
+  const src = { goods: 'mail', x: -6.5, y: 4.5, reach: true, on: true, kind: 'src' };
+  const B = { x: 5.5, y: -3.5, build: 0 }, house = { x: 7.2, y: 5.2 };
+  const drag = easeOut((t - 0.5) / 1.0), linked = t >= 1.5;
+  drawMiniRange(B.x, B.y, 5.4, linked ? 1 : 0.35);
+  if (t >= 0.5) {                      // 引いている最中は青い点線・指先に点。離すと空路 (実線)
+    const tip = { x: src.x + (B.x - src.x) * drag, y: src.y + (B.y - src.y) * drag };
+    if (linked) { ctx.strokeStyle = C.road; ctx.lineWidth = 0.45; ctx.beginPath(); ctx.moveTo(src.x, src.y); ctx.lineTo(B.x, B.y); ctx.stroke(); }
+    else { dashed(src, tip, C.ok, 0.35, now * 6); ctx.fillStyle = C.ok; circle(tip.x, tip.y, 0.45); ctx.fill(); }
+  }
+  drawMiniHouse(house.x, house.y, linked);
+  if (t < 3.35) drawPackage(house.x + 2.0, house.y + 0.6, 0.95, 'mail');   // 家が待っている荷物。届いた瞬間に消える
+  drawSource(src);
+  drawHub(B, linked ? 1 : 0.4, false);
+  const d = { bob: 0, carrying: true, order: { kind: 'mail' } };
+  if (t < 1.7) drawDrone(d, now, src.x, src.y - 4.3, true);
+  else if (t < 2.6) { const k = easeOut((t - 1.7) / 0.9); drawDrone(d, now, src.x + (B.x - src.x) * k, src.y - 4.3 + (B.y - src.y + 4.3) * k, false); }
+  else if (t < 3.35) { const k = easeOut((t - 2.6) / 0.75); drawDrone(d, now, B.x + (house.x - 1.6 - B.x) * k, B.y + (house.y - 1.6 - B.y) * k, false); }
+  else { d.carrying = false; drawDrone(d, now, house.x - 1.6, house.y - 1.6, true); }
+  const ta = t < 0.5 ? clamp01((t - 0.2) / 0.3) : t < 1.5 ? 1 : clamp01(1 - (t - 1.5) / 0.3);
+  drawTouch(src.x + (B.x - src.x) * drag, src.y + (B.y - src.y) * drag, ta);
+}
+// コマ2: 届かない家に荷物が積み上がると赤い輪が縮み、終了 (何をすると失敗するか)
+function drawInfoPanel1(now) {
+  const t = now % 4.6, house = { x: -1.5, y: 0.5 };
+  drawMiniHouse(house.x, house.y, false);
+  const n = Math.min(6, Math.floor(t / 0.36));
+  const kinds = ['mail', 'veg', 'mail', 'milk', 'mail', 'veg'];
+  for (let i = 0; i < n; i++) drawPackage(house.x + 2.0 + (i % 3) * 1.15, house.y + 0.6 - Math.floor(i / 3) * 1.15, 0.95, kinds[i]);
+  if (t >= 2.3) {                      // 縮む輪 (本編と同じ)
+    const r = 6.5 - (6.5 - 2.2) * clamp01((t - 2.3) / 1.2);
+    ctx.strokeStyle = 'rgba(224,83,79,0.9)'; ctx.lineWidth = 0.35; circle(house.x, house.y, r); ctx.stroke();
+  }
+  if (t >= 3.5) {                      // 終了: 暗くなって赤い×
+    ctx.fillStyle = 'rgba(52,58,72,0.5)'; ctx.fillRect(-INFO_PANEL.w, -INFO_PANEL.h, INFO_PANEL.w * 2, INFO_PANEL.h * 2);
+    ctx.strokeStyle = C.bad; ctx.lineWidth = 0.6; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(house.x - 2.2, house.y - 2.2); ctx.lineTo(house.x + 2.2, house.y + 2.2);
+    ctx.moveTo(house.x + 2.2, house.y - 2.2); ctx.lineTo(house.x - 2.2, house.y + 2.2); ctx.stroke();
+  }
+}
+// コマ3: ハブを長押しすると輪が満ちて持ち上がり、指について動く。離すと建設中 (動かす操作)
+function drawInfoPanel2(now) {
+  const t = now % 4.4;
+  const A = { x: -4.5, y: 0.5 }, Bx = 4.5, By = 0.5;
+  const hold = clamp01((t - 0.4) / 0.6), lifted = t >= 1.0, mv = easeOut((t - 1.0) / 1.2), dropped = t >= 2.2;
+  const gx = A.x + (Bx - A.x) * mv, gy = A.y + (By - A.y) * mv;
+  if (dropped) {
+    const b = { x: Bx, y: By, build: CFG.buildT * (1 - clamp01((t - 2.2) / 2.0)) };
+    drawMiniRange(Bx, By, 5.4, 0.35 + 0.65 * clamp01((t - 2.2) / 2.0));
+    drawHub(b, 1, false);
+  } else {
+    drawMiniRange(A.x, A.y, 5.4, 1);
+    drawHub(A, lifted ? 0.4 : 1, false);
+    if (hold > 0.15 && !lifted) {      // 長押しの進み具合の輪 (本編と同じ)
+      ctx.strokeStyle = 'rgba(79,120,179,0.9)'; ctx.lineWidth = 0.35;
+      ctx.beginPath(); ctx.arc(A.x, A.y, CFG.hubR + 0.9, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * hold); ctx.stroke();
+    }
+    if (lifted) {                      // 持ち上がったハブ (影つき) が指についてくる
+      ctx.fillStyle = 'rgba(40,50,40,0.18)'; ctx.beginPath(); ctx.ellipse(gx + 0.9, gy - 0.6, CFG.hubR * 1.1, CFG.hubR * 0.7, 0, 0, Math.PI * 2); ctx.fill();
+      drawHub({ x: gx, y: gy - 2.4, build: 0 }, 0.85, false);   // 指の少し上に持ち上がる (指の印と重ねない)
+    }
+  }
+  const ta = t < 0.4 ? clamp01((t - 0.1) / 0.3) : t < 2.2 ? 1 : clamp01(1 - (t - 2.2) / 0.3);
+  drawTouch(gx, gy, ta);
+}
+function drawInfo(now) {
   ctx.fillStyle = 'rgba(52,58,72,0.45)'; ctx.fillRect(0, 0, W, H);
-  ctx.fillStyle = '#ffffff'; rr(50 - 17, 20.5, 34, 15.5, 1.6); ctx.fill();
-  ctx.fillStyle = C.hubLine; circle(50, 25, 1.7); ctx.fill();
-  ctx.fillStyle = '#ffffff'; circle(50, 24.2, 0.3); ctx.fill(); ctx.fillRect(50 - 0.25, 24.7, 0.5, 1.2);
+  ctx.fillStyle = '#ffffff'; rr(INFO_BOX.x, INFO_BOX.y, INFO_BOX.w, INFO_BOX.h, 1.6); ctx.fill();
+  ctx.fillStyle = C.hubLine; circle(50, 12.6, 1.5); ctx.fill();               // i の印
+  ctx.fillStyle = '#ffffff'; circle(50, 11.9, 0.27); ctx.fill(); ctx.fillRect(50 - 0.22, 12.35, 0.44, 1.05);
+  const P = INFO_PANEL;
+  [drawInfoPanel0, drawInfoPanel1, drawInfoPanel2].forEach((fn, i) => {
+    const px = P.xs[i];
+    ctx.fillStyle = C.grass; rr(px - P.w / 2, P.y - P.h / 2, P.w, P.h, 1.2); ctx.fill();
+    ctx.strokeStyle = 'rgba(79,120,179,0.35)'; ctx.lineWidth = 0.2; ctx.stroke();
+    ctx.save(); ctx.beginPath(); rr(px - P.w / 2, P.y - P.h / 2, P.w, P.h, 1.2); ctx.clip();
+    ctx.translate(px, P.y); ctx.lineCap = 'round'; fn(now); ctx.restore();
+  });
   const w = textW('Privacy Policy', 2.8, true);
   text('Privacy Policy', INFO_LINK.x, INFO_LINK.y, 2.8, C.hubLine, 'center', true);
   ctx.strokeStyle = C.hubLine; ctx.lineWidth = 0.18;
@@ -1138,7 +1239,7 @@ function draw(now) {
   drawDrones(now);
   drawHUD();
   if (S.reward) drawReward(now);
-  if (S.info) drawInfo();
+  if (S.info) drawInfo(now);
   if (S.over) drawOver();
   ctx.restore();
 }
