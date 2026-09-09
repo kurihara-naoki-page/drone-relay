@@ -125,6 +125,7 @@ function newGame() {
     lastKind: null, deliverT: 0,            // 最後に届けた荷物の種類・届けた数の数字がその色でふくらむ残り秒数
     houseInt: CFG.houseInt0, nextHouse: CFG.houseInt0,
     over: false, overT: 0, reward: false, paused: false, speed: 1,
+    info: false, started: false,        // 小窓 (プライバシーポリシーの入口) / 最初の入力があったか (ポータル SDK の gameplayStart 用)
     hbT: 0, nextId: 1, flash: 0,
   };
   for (const def of SRC_DEFS) {
@@ -493,7 +494,7 @@ function update(dt) {
   S.deliverT = Math.max(0, S.deliverT - dt);
   for (const h of S.houses) h.pulse = Math.max(0, h.pulse - dt * 3);
   if (S.over) { S.overT += dt; return; }
-  if (S.reward || S.paused) return;
+  if (S.reward || S.paused || S.info) return;
   S.t += dt; S.weekT += dt;
   // 建設中のハブ
   let built = false;
@@ -537,7 +538,8 @@ function chooseReward(which) {
 // ---- 入力 -----------------------------------------------------------
 let ptr = null, lastTap = null;
 const HUD_H = 6.2;                     // 上の帯の高さ (ここへハブを運ぶと手持ちに戻る)
-const BTN = { pause: { x: 92.3, y: 3.3, r: 2.1 }, speed: { x: 97.0, y: 3.3, r: 2.1 } };
+const BTN = { info: { x: 87.6, y: 3.3, r: 2.1 }, pause: { x: 92.3, y: 3.3, r: 2.1 }, speed: { x: 97.0, y: 3.3, r: 2.1 } };
+const INFO_LINK = { x: 50, y: 30.6, w: 28, h: 5.5 };   // 小窓の中のリンク (Privacy Policy) の当たり
 const CARD = { drone: { x: 38, y: 31, w: 18, h: 16 }, tool: { x: 62, y: 31, w: 18, h: 16 } };
 function hitNode(p, rad) {
   let best = null, bd = Infinity;
@@ -564,8 +566,12 @@ cv.addEventListener('pointerdown', e => {
   try { cv.setPointerCapture(e.pointerId); } catch (x) {}
   // mode: 'line' = 空路を引く (ハブ・供給元から動かした) / 'move' = ハブを持ち上げた (長押し)
   ptr = { id: e.pointerId, sx: p.x, sy: p.y, x: p.x, y: p.y, hit: null, drag: false, mode: null, btn: null, downT: performance.now() };
-  if (S.over || S.reward) return;
-  ptr.btn = hitButton(p); if (ptr.btn) return;
+  if (S.info) return;                  // 小窓が開いている: 離したときに閉じる／リンクを開く
+  if (S.over || S.reward) { S.started = true; return; }
+  ptr.btn = hitButton(p);
+  if (ptr.btn === 'info') return;      // 小窓を開くだけの操作は「遊び始めた」に数えない
+  S.started = true;
+  if (ptr.btn) return;
   const n = hitNode(p); if (n) { ptr.hit = n; return; }
   const ed = hitEdge(p); if (ed) { ptr.hit = { kind: 'edge', e: ed }; }
 });
@@ -586,11 +592,20 @@ const holdFrac = () => (ptr && !ptr.drag && ptr.hit && ptr.hit.kind === 'hub') ?
 function pointerEnd(e) {
   if (!ptr || e.pointerId !== ptr.id) return;
   const p = toWorld(e); const q = ptr; ptr = null;
+  if (S.info) {                        // 小窓: リンクの上で離せば方針のページを新しいタブで開く。どこで離しても閉じる
+    if (Math.abs(p.x - INFO_LINK.x) < INFO_LINK.w / 2 && Math.abs(p.y - INFO_LINK.y) < INFO_LINK.h / 2) {
+      let w = null; try { w = window.open('privacy.html', '_blank', 'noopener'); } catch (x) {}
+      if (!w) location.href = 'privacy.html';   // 新しいタブを開けない環境 (ポップアップ禁止の枠内など) では同じタブで開く
+    }
+    S.info = false; return;
+  }
   if (S.over) { if (S.overT > 0.7) newGame(); return; }
   if (S.reward) { const c = hitCard(p); if (c) chooseReward(c); return; }
   if (q.btn) {
     if (hitButton(p) !== q.btn) return;
-    if (q.btn === 'pause') S.paused = !S.paused; else S.speed = S.speed === 1 ? 2 : 1;
+    if (q.btn === 'info') S.info = true;
+    else if (q.btn === 'pause') S.paused = !S.paused;
+    else S.speed = S.speed === 1 ? 2 : 1;
     return;
   }
   if (q.drag && q.hit) {
@@ -626,7 +641,8 @@ function pointerEnd(e) {
 cv.addEventListener('pointerup', pointerEnd);
 cv.addEventListener('pointercancel', e => { if (ptr && e.pointerId === ptr.id) ptr = null; });
 addEventListener('keydown', e => {
-  if (e.key === ' ') { e.preventDefault(); if (!S.over && !S.reward) S.paused = !S.paused; }
+  if (e.key === 'Escape') S.info = false;
+  if (e.key === ' ') { e.preventDefault(); if (!S.over && !S.reward && !S.info) S.paused = !S.paused; }
   if (e.key === 'f' || e.key === 'F') S.speed = S.speed === 1 ? 2 : 1;
   if (e.key === 'r' || e.key === 'R') newGame();
   if (S.reward && (e.key === '1' || e.key === 'ArrowLeft')) chooseReward('drone');
@@ -653,6 +669,11 @@ function star(x, y, r) {               // 最高記録の印 (文字なし)
   ctx.beginPath();
   for (let i = 0; i < 10; i++) { const a = -Math.PI / 2 + i * Math.PI / 5, k = i % 2 ? r * 0.45 : r; ctx.lineTo(x + Math.cos(a) * k, y + Math.sin(a) * k); }
   ctx.closePath();
+}
+function textW(str, size, bold) {      // 文字の幅 (相対座標)
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.font = (bold ? 'bold ' : '') + (size * scale) + 'px system-ui, -apple-system, "Segoe UI", sans-serif';
+  const w = ctx.measureText(str).width / scale; ctx.restore(); return w;
 }
 function text(str, x, y, size, color, align, bold) {
   ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -997,13 +1018,15 @@ function drawHUD() {
   // 右上ボタン
   for (const k in BTN) {
     const b = BTN[k];
-    const on = (k === 'pause' && S.paused) || (k === 'speed' && S.speed === 2);
+    const on = (k === 'pause' && S.paused) || (k === 'speed' && S.speed === 2) || (k === 'info' && S.info);
     ctx.fillStyle = on ? C.hubLine : '#ffffff'; circle(b.x, b.y, b.r); ctx.fill();
     ctx.strokeStyle = C.hubLine; ctx.lineWidth = 0.3; ctx.stroke();
     ctx.fillStyle = on ? '#ffffff' : C.ink;
     if (k === 'pause') {
       if (S.paused) { ctx.beginPath(); ctx.moveTo(b.x - 0.6, b.y - 0.9); ctx.lineTo(b.x + 0.9, b.y); ctx.lineTo(b.x - 0.6, b.y + 0.9); ctx.closePath(); ctx.fill(); }
       else { ctx.fillRect(b.x - 0.8, b.y - 0.9, 0.55, 1.8); ctx.fillRect(b.x + 0.25, b.y - 0.9, 0.55, 1.8); }
+    } else if (k === 'info') {         // i の印 (点と棒)
+      circle(b.x, b.y - 0.95, 0.36); ctx.fill(); ctx.fillRect(b.x - 0.3, b.y - 0.3, 0.6, 1.4);
     } else {
       for (const dx of [-0.95, 0.15]) { ctx.beginPath(); ctx.moveTo(b.x + dx, b.y - 0.85); ctx.lineTo(b.x + dx + 0.95, b.y); ctx.lineTo(b.x + dx, b.y + 0.85); ctx.closePath(); ctx.fill(); }
     }
@@ -1058,6 +1081,17 @@ function drawReward(now) {
     else drawToolIcon(S.rewardTool, c.x, c.y - 0.5, now);
   }
 }
+// 小窓。文字なし方針の唯一の例外 = 英語1行 (ポータルが求める「プライバシーポリシーの入口」。2026-09-09 本人裁定)
+function drawInfo() {
+  ctx.fillStyle = 'rgba(52,58,72,0.45)'; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = '#ffffff'; rr(50 - 17, 20.5, 34, 15.5, 1.6); ctx.fill();
+  ctx.fillStyle = C.hubLine; circle(50, 25, 1.7); ctx.fill();
+  ctx.fillStyle = '#ffffff'; circle(50, 24.2, 0.3); ctx.fill(); ctx.fillRect(50 - 0.25, 24.7, 0.5, 1.2);
+  const w = textW('Privacy Policy', 2.8, true);
+  text('Privacy Policy', INFO_LINK.x, INFO_LINK.y, 2.8, C.hubLine, 'center', true);
+  ctx.strokeStyle = C.hubLine; ctx.lineWidth = 0.18;
+  ctx.beginPath(); ctx.moveTo(INFO_LINK.x - w / 2, INFO_LINK.y + 1.7); ctx.lineTo(INFO_LINK.x + w / 2, INFO_LINK.y + 1.7); ctx.stroke();
+}
 function drawOver() {
   const a = Math.min(1, S.overT / 0.6);
   ctx.fillStyle = 'rgba(52,58,72,' + (0.55 * a) + ')'; ctx.fillRect(0, 0, W, H);
@@ -1104,9 +1138,21 @@ function draw(now) {
   drawDrones(now);
   drawHUD();
   if (S.reward) drawReward(now);
+  if (S.info) drawInfo();
   if (S.over) drawOver();
   ctx.restore();
 }
+
+// ---- ポータル SDK の差し込み口 -------------------------------------------
+// Poki (gameLoadingFinished / gameplayStart / gameplayStop) と CrazyGames (loadingStop / gameplayStart / gameplayStop) は
+// 求める合図が同じ。どちらに出すか決まるまで中身は空。毎フレーム「遊んでいる状態か」を見て、変わったときだけ1回呼ぶ (二重発火なし)
+const Portal = {
+  playing: false,
+  loadingFinished() {},               // 最初の描画が終わったとき (1回)
+  gameplayStart() {}, gameplayStop() {},
+  sync(active) { if (active === this.playing) return; this.playing = active; if (active) this.gameplayStart(); else this.gameplayStop(); },
+};
+const isPlaying = () => S.started && !S.over && !S.reward && !S.paused && !S.info && !document.hidden;
 
 // ---- ループ ---------------------------------------------------------
 newGame();
@@ -1119,6 +1165,8 @@ function frame(now) {
   checkHold();
   update(dt * S.speed);
   draw(now / 1000);
+  if (!frame.loaded) { frame.loaded = true; Portal.loadingFinished(); }
+  Portal.sync(isPlaying());
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
