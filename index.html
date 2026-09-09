@@ -1,0 +1,1101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Drone Relay</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #c9dfb8; overflow: hidden;
+    touch-action: none; -webkit-user-select: none; user-select: none; }
+  canvas { display: block; width: 100vw; height: 100vh; touch-action: none; cursor: crosshair; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+'use strict';
+// =====================================================================
+//  Drone Delivery - prototype 2  (試作1 + 供給元3つ・荷物3色)
+//  画面幅を 100 とした相対座標。16:9 固定 (100 x 56.25)。
+//  文字なし (数字と絵記号だけ)。素材なし (四角・丸・線だけ)。
+// =====================================================================
+const W = 100, H = 56.25;
+
+// ---- 初期値 (遊んで直す) --------------------------------------------
+const CFG = {
+  L: 25,                 // 航続距離: 空路1本の上限
+  R: 8,                  // ハブのサービス範囲
+  houseHalf: 1.6,        // 家の絵の半径。円に絵が少しでもかかれば配達可能 (判定 = R + houseHalf)
+  buildT: 10,            // 建設中の時間 (秒)。置いた直後・動かした直後はこの間だけ働かない
+  holdT: 0.5,            // ハブを長押しして持ち上げる (動かす) までの秒数。ドラッグは常に「空路を引く」
+  tools: ['range', 'reach'],   // 週のごほうび: ハブは必ず1つ + 「ドローン」か「道具」の2択。道具はここから無作為
+  toolRange: 1, toolReach: 4,  // 道具の効き目: サービス範囲 +1 / 航続距離 +4
+  rangeAnimT: 1.4,       // 範囲拡大を選んだ直後、全ハブの円が旧→新の大きさへ広がる動きの秒数 (+1 は見た目の差が小さいので動きで見せる)
+  milkWeek: 2,           // 牧場 (牛乳) が現れる週 (試作2)
+  speed: 100 / 6,        // ドローン速度: 画面幅を約6秒で横断
+  startHubStock: 1,      // 開始時の手持ちハブ (配置済み1 + 手持ち1)
+  startDrones: 3,
+  houseInt0: 22, houseShrink: 0.97, houseIntMin: 8,   // 家の追加間隔 (Mini Metro の駅の間隔に近づけた。週に2〜4軒)
+  nearBias: 0.65, nearRmin: 0.7, nearRmax: 1.9,       // 家は「すでに覆っている範囲の近く」に生えやすい (確率・範囲 R の倍率)
+  startHouses: [[60, 27, 'mail'], [29, 35, 'mail'], [18, 20, 'veg']],   // 開始時の家と最初の注文 (最初の1分を静かにしない)
+  orderInt: 20, orderJitter: 0.3,                     // 家1軒の注文間隔
+  N: 6, G: 10,           // 溢れの閾値 (届いていない注文の数・運んでいる最中も含む) / 猶予 (秒)
+  week: 60,              // 1週間の長さ (秒)
+  zoneEvery: 3, zoneRmin: 6, zoneRmax: 10,            // 禁止区域
+  // 当たり判定・見た目
+  hubR: 1.6, whR: 2.4, srcR: 2.0, nodeHit: 2.8, edgeHit: 1.1, snap: 3.4,
+};
+// 荷物の種類 (色で区別。文字なし)
+const KINDS = {
+  mail: { fill: '#c99a5b', line: '#7a5a30', roof: '#8a7353' },
+  veg:  { fill: '#8cc07a', line: '#4d7a3e', roof: '#5f9a4e' },
+  milk: { fill: '#f7f4ec', line: '#6f95b8', roof: '#7fa6c9' },
+};
+// 供給元 (倉庫=郵便・畑=野菜・牧場=牛乳)。位置は固定。牧場は milkWeek で現れる
+const SRC_DEFS = [
+  { goods: 'mail', x: 35, y: 28,   home: true, on: true },
+  { goods: 'veg',  x: 19, y: 12.5, on: true },
+  { goods: 'milk', x: 70, y: 48.5, on: false },
+];
+
+// ---- Canvas ---------------------------------------------------------
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+let scale = 1, ox = 0, oy = 0, dpr = 1;
+function resize() {
+  dpr = window.devicePixelRatio || 1;
+  const w = innerWidth, h = innerHeight;
+  cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+  scale = Math.min(cv.width / W, cv.height / H);
+  ox = (cv.width - W * scale) / 2; oy = (cv.height - H * scale) / 2;
+}
+addEventListener('resize', resize); resize();
+function toWorld(e) {
+  const r = cv.getBoundingClientRect();
+  return { x: ((e.clientX - r.left) * dpr - ox) / scale, y: ((e.clientY - r.top) * dpr - oy) / scale };
+}
+
+// ---- 幾何 -----------------------------------------------------------
+const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+function segPointDist(a, b, p) {
+  const dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy;
+  let t = l2 ? ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2 : 0;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+}
+const segCircleHit = (a, b, c, r) => segPointDist(a, b, c) < r;
+const rnd = (a, b) => a + Math.random() * (b - a);
+
+// ---- 音 (Web Audio 合成・音源ファイルなし) ----------------------------
+const Snd = {
+  ac: null,
+  unlock() {
+    if (!this.ac) { try { this.ac = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { this.ac = null; } }
+    if (this.ac && this.ac.state === 'suspended') this.ac.resume();
+  },
+  tone(f, d, type, g, t0) {
+    if (!this.ac) return;
+    const ac = this.ac, o = ac.createOscillator(), v = ac.createGain();
+    o.type = type || 'sine'; o.frequency.value = f;
+    const t = ac.currentTime + (t0 || 0);
+    v.gain.setValueAtTime(0.0001, t);
+    v.gain.exponentialRampToValueAtTime(g || 0.15, t + 0.012);
+    v.gain.exponentialRampToValueAtTime(0.0001, t + d);
+    o.connect(v).connect(ac.destination); o.start(t); o.stop(t + d + 0.05);
+  },
+  chime() { this.tone(880, 0.35, 'sine', 0.10); this.tone(1320, 0.5, 'sine', 0.05, 0.06); },
+  thump() { this.tone(55, 0.28, 'sine', 0.35); },
+  week() { this.tone(523, 0.18, 'triangle', 0.10); this.tone(784, 0.35, 'triangle', 0.10, 0.14); },
+  over() { this.tone(330, 0.4, 'triangle', 0.12); this.tone(220, 0.9, 'triangle', 0.12, 0.3); },
+  place() { this.tone(660, 0.07, 'square', 0.03); },
+  nope() { this.tone(180, 0.12, 'square', 0.04); },
+  lift() { this.tone(330, 0.08, 'triangle', 0.06); this.tone(495, 0.12, 'triangle', 0.06, 0.06); },
+  appear() { this.tone(440, 0.15, 'sine', 0.08); this.tone(660, 0.25, 'sine', 0.08, 0.12); this.tone(880, 0.4, 'sine', 0.06, 0.24); },
+};
+
+// ---- 状態 -----------------------------------------------------------
+let S = null;
+function newGame() {
+  S = {
+    t: 0, week: 1, weekT: 0, WH: null, sources: [],
+    hubs: [], edges: [], zones: [], drones: [], houses: [],
+    hubStock: CFG.startHubStock, delivered: 0,
+    R: CFG.R, L: CFG.L, rewardTool: null,   // 範囲と航続距離は道具で伸びる (試作3)
+    rangeFrom: CFG.R, rangeT: 0,            // 範囲が広がる動き (旧い半径・残り秒数)
+    lastKind: null, deliverT: 0,            // 最後に届けた荷物の種類・届けた数の数字がその色でふくらむ残り秒数
+    houseInt: CFG.houseInt0, nextHouse: CFG.houseInt0,
+    over: false, overT: 0, reward: false, paused: false, speed: 1,
+    hbT: 0, nextId: 1, flash: 0,
+  };
+  for (const def of SRC_DEFS) {
+    const s = Object.assign({ kind: 'src', reach: false, born: 0, id: S.nextId++ }, def);
+    S.sources.push(s); if (s.home) S.WH = s;
+  }
+  // 最初の10秒で分かる状態: 倉庫・畑 (つないである)・家1軒・ハブ1つ・飛ぶドローン。
+  // 畑は最初からつないでおき「野菜は畑から来る」を先に見せる。「供給元は自分でつなぐ」は週2の牧場で学ぶ
+  const h = addHub(55, 22, true);      // 最初の1つは建設済み
+  addEdge(S.WH, h);
+  addEdge(S.WH, srcOf('veg'));
+  for (const [x, y, kind] of CFG.startHouses) addOrder(addHouse(x, y), kind);
+  addOrder(S.houses[0], 'veg');
+  for (let i = 0; i < CFG.startDrones; i++) S.drones.push(newDrone());
+  recomputeReach();
+}
+function newDrone() {
+  return { x: S.WH.x, y: S.WH.y, ang: 0, state: 'idle', node: S.WH, path: null, pathI: 0, onEdge: null,
+           order: null, src: null, hub: null, carrying: false, bob: Math.random() * 6.28 };
+}
+function addHub(x, y, built) {
+  const h = { x, y, kind: 'hub', reach: false, build: built ? 0 : CFG.buildT, id: S.nextId++ };
+  S.hubs.push(h); return h;
+}
+const active = n => n.kind === 'src' || n.build <= 0;   // 建設中のハブは中継も配達もしない
+const hasEdge = n => S.edges.some(e => e.a === n || e.b === n);
+function addHouse(x, y) {
+  const h = { x, y, kind: 'house', orders: [], nextOrder: CFG.orderInt * rnd(0.3, 0.8), overT: 0, pulse: 0, id: S.nextId++ };
+  S.houses.push(h); return h;
+}
+const activeKinds = () => S.sources.filter(s => s.on).map(s => s.goods);
+function addOrder(house, kind) {
+  if (!kind) { const ks = activeKinds(); kind = ks[Math.floor(Math.random() * ks.length)]; }
+  house.orders.push({ house, kind, t0: S.t, picked: false });
+}
+const srcOf = kind => S.sources.find(s => s.goods === kind);
+function addEdge(a, b) { S.edges.push({ a, b }); recomputeReach(); }
+function removeEdge(e) { S.edges = S.edges.filter(x => x !== e); recomputeReach(); }
+const nodes = () => [...S.sources.filter(s => s.on), ...S.hubs];
+const waiting = h => h.orders.length;   // 家が待っている注文 (届くまで数える。運んでいる最中も含む)
+const nodeR = n => n.kind === 'hub' ? CFG.hubR : n.home ? CFG.whR : CFG.srcR;
+
+// ---- グラフ ---------------------------------------------------------
+function neighbors(n) {
+  const out = [];
+  for (const e of S.edges) { if (e.a === n) out.push(e.b); else if (e.b === n) out.push(e.a); }
+  return out;
+}
+function edgeBetween(a, b) { return S.edges.find(e => (e.a === a && e.b === b) || (e.a === b && e.b === a)) || null; }
+// reach = 今つながっている (建設中のハブは通らない) / soon = 建設が終わればつながる (誘導はこちらで判断する)
+function recomputeReach() {
+  for (const n of [...S.hubs, ...S.sources]) { n.reach = false; n.soon = false; }
+  flood('reach', active); flood('soon', () => true);
+}
+function flood(flag, ok) {
+  S.WH[flag] = true;
+  const q = [S.WH], seen = new Set([S.WH]);
+  while (q.length) {
+    const n = q.shift();
+    for (const m of neighbors(n)) if (!seen.has(m) && ok(m)) { seen.add(m); m[flag] = true; q.push(m); }
+  }
+}
+// ダイクストラ (ノードは多くて30程度)
+function findPath(from, to) {
+  if (from === to) return [from];
+  const ns = nodes().filter(active); if (!ns.includes(from) || !ns.includes(to)) return null;
+  const d = new Map(), prev = new Map(), done = new Set();
+  for (const n of ns) d.set(n, Infinity); d.set(from, 0);
+  while (true) {
+    let u = null, best = Infinity;
+    for (const n of ns) if (!done.has(n) && d.get(n) < best) { best = d.get(n); u = n; }
+    if (!u) return null;
+    if (u === to) break;
+    done.add(u);
+    for (const v of neighbors(u)) {
+      if (!active(v)) continue;
+      const nd = d.get(u) + dist(u, v);
+      if (nd < d.get(v)) { d.set(v, nd); prev.set(v, u); }
+    }
+  }
+  const path = [to]; let c = to;
+  while (c !== from) { c = prev.get(c); path.push(c); }
+  return path.reverse();
+}
+// 家を受け持つノード: 倉庫からたどり着けて、サービス範囲内で最も近いもの
+function servingHub(house) {
+  let best = null, bd = Infinity;
+  for (const n of nodes()) {
+    if (!n.reach) continue;
+    const dd = dist(n, house);
+    if (dd <= S.R + CFG.houseHalf && dd < bd) { bd = dd; best = n; }
+  }
+  return best;
+}
+// ノードにいるドローンの次の仕事: 待ち時間の長い注文から。供給元と受け持ちハブの両方が網につながっているもの
+function pickJob(node) {
+  let best = null;
+  for (const h of S.houses) {
+    for (const o of h.orders) {
+      if (o.picked || (best && o.t0 >= best.o.t0)) continue;
+      const src = srcOf(o.kind); if (!src || !src.on || !src.reach) continue;
+      const hub = servingHub(h); if (!hub) continue;
+      best = { o, src, hub };
+    }
+  }
+  return best;
+}
+
+// ---- 制約 (このゲームの線路) ----------------------------------------
+function edgeProblem(a, b, pa, pb) {   // null なら引ける
+  pa = pa || a; pb = pb || b;
+  if (a === b) return 'same';
+  if (edgeBetween(a, b)) return 'dup';
+  if (dist(pa, pb) > S.L) return 'far';
+  if (S.zones.some(z => segCircleHit(pa, pb, z, z.r))) return 'zone';
+  return null;
+}
+function hubPosValid(p, self) {
+  if (p.x < 2 || p.x > W - 2 || p.y < 6.5 || p.y > H - 2) return false;
+  if (S.zones.some(z => dist(p, z) < z.r + CFG.hubR)) return false;
+  for (const s of S.sources) if (dist(p, s) < nodeR(s) + CFG.hubR + 1) return false;   // まだ現れていない供給元の場所も空けておく
+  for (const h of S.hubs) if (h !== self && dist(p, h) < CFG.hubR * 2 + 0.5) return false;
+  for (const h of S.houses) if (dist(p, h) < 2.6) return false;
+  return true;
+}
+function hubMoveValid(hub, p) {
+  if (!hubPosValid(p, hub)) return false;
+  for (const e of S.edges) {
+    if (e.a === hub) { if (dist(p, e.b) > S.L || S.zones.some(z => segCircleHit(p, e.b, z, z.r))) return false; }
+    else if (e.b === hub) { if (dist(e.a, p) > S.L || S.zones.some(z => segCircleHit(e.a, p, z, z.r))) return false; }
+  }
+  return true;
+}
+// 孤島のノード (または置こうとしている位置) に空路を引ける元。なければ null。建設中でも網につながる予定のハブは元になる
+function hintSource(p, self) {
+  let best = null, bd = Infinity;
+  for (const n of nodes()) {
+    if (!n.soon || n === self) continue;
+    const dd = dist(n, p);
+    if (dd > S.L || dd >= bd) continue;
+    if (S.zones.some(z => segCircleHit(n, p, z, z.r))) continue;
+    bd = dd; best = n;
+  }
+  return best;
+}
+function nearestReach(p, self) {
+  let best = null, bd = Infinity;
+  for (const n of nodes()) { if (!n.soon || n === self) continue; const dd = dist(n, p); if (dd < bd) { bd = dd; best = n; } }
+  return best;
+}
+// ハブを手持ちに戻す (捨てない)。つながる空路は消え、使っていたドローンはその場で道を引き直す
+function pickUpHub(h) {
+  S.edges = S.edges.filter(e => e.a !== h && e.b !== h);
+  S.hubs = S.hubs.filter(x => x !== h);
+  h.reach = false; S.hubStock++; recomputeReach();
+  rerouteDronesUsing(h);
+  Snd.tone(520, 0.12, 'triangle', 0.06); Snd.tone(390, 0.16, 'triangle', 0.06, 0.08);
+}
+// ハブを動かす = 建て直し。建設中に戻り、そのハブを使っていたドローンは道を引き直す
+function moveHub(h, p) {
+  h.x = p.x; h.y = p.y; h.build = CFG.buildT; h.reach = false;
+  recomputeReach(); rerouteDronesUsing(h);
+}
+function rerouteDronesUsing(h) {
+  for (const d of S.drones) {
+    const uses = d.hub === h || d.node === h || (d.path && d.path.slice(d.pathI).includes(h));
+    if (!uses) continue;
+    if (d.node === h) d.node = null;                    // 消えた点の上にいる → 倉庫へ直帰になる
+    if (d.onEdge && (d.onEdge.a === h || d.onEdge.b === h)) d.onEdge = null;   // 空中 → 最後にいた節から引き直す
+    switch (d.state) {
+      case 'idle': if (!d.node) d.state = 'direct'; break;
+      case 'toSrc': {
+        const p = d.node ? findPath(d.node, d.src) : null;
+        if (p) { d.path = p; d.pathI = 1; } else requeue(d);
+        break;
+      }
+      case 'toHub': retarget(d); break;
+      case 'toHouse': d.hub = servingHub(d.order.house); break;
+      case 'backHub': d.hub = null; d.node = null; d.state = 'direct'; break;
+    }
+  }
+}
+function spotFree(p, minD) {
+  for (const s of S.sources) if (dist(p, s) < minD + 3) return false;
+  if (S.hubs.some(h => dist(p, h) < minD)) return false;
+  if (S.houses.some(h => dist(p, h) < minD)) return false;
+  if (S.zones.some(z => dist(p, z) < z.r + 1.5)) return false;
+  if (S.edges.some(e => segPointDist(e.a, e.b, p) < 2.2)) return false;   // 空路の上に家を建てない
+  return true;
+}
+
+// ---- 成長 -----------------------------------------------------------
+function spawnHouse() {
+  const n = S.houses.length;
+  // 多くは、網につながっているノードの近く (範囲の内側〜少し外) に生える。毎回まったく新しい場所を覆わずに済む
+  if (Math.random() < CFG.nearBias) {
+    const anchors = nodes().filter(x => x.reach);
+    for (let i = 0; i < 60 && anchors.length; i++) {
+      const a0 = anchors[Math.floor(Math.random() * anchors.length)];
+      const r = S.R * rnd(CFG.nearRmin, CFG.nearRmax), a = Math.random() * Math.PI * 2;
+      const p = { x: a0.x + Math.cos(a) * r, y: a0.y + Math.sin(a) * r };
+      if (p.x < 3 || p.x > W - 3 || p.y < 7.5 || p.y > H - 3) continue;
+      if (!spotFree(p, 3.2)) continue;
+      addHouse(p.x, p.y); return;
+    }
+  }
+  for (let i = 0; i < 80; i++) {
+    const base = Math.min(9 + n * 2.0, 44);
+    const r = base + rnd(-3, 3), a = Math.random() * Math.PI * 2;
+    const p = { x: S.WH.x + Math.cos(a) * r * 1.2, y: S.WH.y + Math.sin(a) * r * 0.78 };
+    if (p.x < 3 || p.x > W - 3 || p.y < 7.5 || p.y > H - 3) continue;
+    if (!spotFree(p, 3.2)) continue;
+    addHouse(p.x, p.y); return;
+  }
+  for (let i = 0; i < 300; i++) {
+    const p = { x: rnd(3, W - 3), y: rnd(7.5, H - 3) };
+    if (spotFree(p, 3.0)) { addHouse(p.x, p.y); return; }
+  }
+}
+function spawnZone() {
+  let best = null;
+  for (let i = 0; i < 120; i++) {
+    const r = rnd(CFG.zoneRmin, CFG.zoneRmax);
+    const c = { x: rnd(r + 2, W - r - 2), y: rnd(r + 6, H - r - 2), r };
+    if (S.sources.some(s => dist(c, s) < r + 5)) continue;
+    if (S.hubs.some(h => dist(h, c) < r + CFG.hubR + 1)) continue;
+    if (S.houses.some(h => dist(h, c) < r + 1.5)) continue;
+    const cuts = S.edges.filter(e => segCircleHit(e.a, e.b, c, r)).length;
+    // 空路を切る位置も「空いている場所」の候補。切らない位置を優先し、なければ切る
+    if (!best || cuts < best.cuts) { best = { c, cuts }; if (cuts === 0 && i > 20) break; }
+  }
+  if (!best) return;
+  const z = best.c;
+  z.kind = ['fes', 'bird', 'school'][Math.floor(Math.random() * 3)];
+  z.born = S.t;
+  S.zones.push(z);
+  S.edges = S.edges.filter(e => !segCircleHit(e.a, e.b, z, z.r));
+  recomputeReach();
+}
+function activateSource(goods) {      // 新しい供給元が現れる (家がその荷物を頼み始める)
+  const s = srcOf(goods); if (!s || s.on) return;
+  s.on = true; s.born = S.t; recomputeReach(); Snd.appear();
+}
+
+// ---- ドローン -------------------------------------------------------
+function moveTo(d, tx, ty, dt) {
+  const dx = tx - d.x, dy = ty - d.y, L = Math.hypot(dx, dy), step = CFG.speed * dt;
+  if (L > 0.001) d.ang = Math.atan2(dy, dx);
+  if (L <= step) { d.x = tx; d.y = ty; return true; }
+  d.x += dx / L * step; d.y += dy / L * step; return false;
+}
+// 空路の網の上を d.path に沿って進む。節に着くたびに道を確かめ直す (空路が切れた・ハブが動いた)
+// 戻り値: true = 終点に着いた / 'lost' = 道がない / false = 進行中
+function travel(d, dt) {
+  const dest = d.path[d.path.length - 1];
+  const tgt = d.path[d.pathI];
+  if (!tgt) return true;
+  if (!d.onEdge) {
+    const e = d.node ? edgeBetween(d.node, tgt) : null;
+    if (!e) {                          // 空路が消えた → 引き直す
+      const p = d.node ? findPath(d.node, dest) : null;
+      if (!p) return 'lost';
+      d.path = p; d.pathI = 1;
+      if (p.length === 1) return true;
+      return false;
+    }
+    d.onEdge = e;
+  }
+  if (moveTo(d, tgt.x, tgt.y, dt)) {
+    d.onEdge = null; d.node = tgt; d.pathI++;
+    if (d.pathI >= d.path.length) return true;
+    const p = findPath(d.node, dest);
+    if (!p) return 'lost';
+    d.path = p; d.pathI = 1;
+  }
+  return false;
+}
+function requeue(d) {                  // 荷物を持ったまま道が消えた → 注文を戻す
+  if (d.order) { d.order.picked = false; d.order = null; }
+  d.src = null; d.hub = null; d.carrying = false; d.onEdge = null; d.path = null;
+  if (d.node && d.node.reach) d.state = 'idle';
+  else { d.node = null; d.state = 'direct'; }          // 網から外れた: 倉庫へ直帰 (例外時のみ)
+}
+function startToHub(d) {               // 供給元で荷物を積んだ → 受け持ちハブへ
+  d.carrying = true;
+  const p = findPath(d.node, d.hub);
+  if (!p) { retarget(d); return; }
+  d.path = p; d.pathI = 1; d.state = p.length > 1 ? 'toHub' : 'toHouse';
+}
+function retarget(d) {                 // 受け持ちハブが使えなくなった → 別のハブで受け持てるか
+  const hub2 = servingHub(d.order.house);
+  const p2 = hub2 && d.node ? findPath(d.node, hub2) : null;
+  if (p2) { d.hub = hub2; d.path = p2; d.pathI = 1; d.state = p2.length > 1 ? 'toHub' : 'toHouse'; }
+  else requeue(d);
+}
+function droneUpdate(d, dt) {
+  const WH = S.WH;
+  switch (d.state) {
+    case 'idle': {                     // 節に降りて待つ。仕事があれば供給元へ
+      if (!d.node || !d.node.reach) { d.node = null; d.state = 'direct'; return; }
+      const job = pickJob(d.node); if (!job) return;
+      job.o.picked = true; d.order = job.o; d.src = job.src; d.hub = job.hub;
+      if (d.node === job.src) { startToHub(d); return; }
+      const p = findPath(d.node, job.src);
+      if (!p) { requeue(d); return; }
+      d.path = p; d.pathI = 1; d.state = 'toSrc';
+      return;
+    }
+    case 'toSrc': {
+      const r = travel(d, dt);
+      if (r === 'lost') requeue(d);
+      else if (r === true) startToHub(d);
+      return;
+    }
+    case 'toHub': {
+      if (!d.onEdge) {                 // 節にいる間に受け持ちハブを確かめ直す (空路が切れた・ハブが動いた)
+        const still = d.hub.reach && dist(d.hub, d.order.house) <= S.R + CFG.houseHalf;
+        if (!still) { retarget(d); return; }
+      }
+      const r = travel(d, dt);
+      if (r === 'lost') retarget(d);
+      else if (r === true) d.state = 'toHouse';
+      return;
+    }
+    case 'toHouse': {
+      const h = d.order.house;
+      if (moveTo(d, h.x, h.y, dt)) {
+        h.orders = h.orders.filter(o => o !== d.order);
+        S.lastKind = d.order.kind; S.deliverT = 0.5;
+        d.order = null; d.src = null; d.carrying = false; S.delivered++; h.pulse = 1; Snd.chime();
+        if (d.hub && d.hub.reach && active(d.hub)) d.state = 'backHub';
+        else { d.hub = null; d.node = null; d.state = 'direct'; }   // 戻る先のハブが消えていれば倉庫へ直帰
+      }
+      return;
+    }
+    case 'backHub': {
+      if (moveTo(d, d.hub.x, d.hub.y, dt)) { d.node = d.hub; d.hub = null; d.state = 'idle'; }
+      return;
+    }
+    case 'direct': {
+      if (moveTo(d, WH.x, WH.y, dt)) { d.node = WH; d.state = 'idle'; }
+      return;
+    }
+  }
+}
+
+// ---- 進行 -----------------------------------------------------------
+function gameOver() { S.over = true; S.overT = 0; Snd.over(); }
+function update(dt) {
+  S.flash = Math.max(0, S.flash - dt);
+  S.rangeT = Math.max(0, S.rangeT - dt);
+  S.deliverT = Math.max(0, S.deliverT - dt);
+  for (const h of S.houses) h.pulse = Math.max(0, h.pulse - dt * 3);
+  if (S.over) { S.overT += dt; return; }
+  if (S.reward || S.paused) return;
+  S.t += dt; S.weekT += dt;
+  // 建設中のハブ
+  let built = false;
+  for (const h of S.hubs) if (h.build > 0) { h.build -= dt; if (h.build <= 0) { h.build = 0; built = true; } }
+  if (built) { recomputeReach(); Snd.tone(660, 0.1, 'triangle', 0.07); Snd.tone(990, 0.2, 'triangle', 0.07, 0.09); }
+  // 家が増える
+  S.nextHouse -= dt;
+  if (S.nextHouse <= 0) {
+    spawnHouse();
+    S.houseInt = Math.max(CFG.houseIntMin, S.houseInt * CFG.houseShrink);
+    S.nextHouse = S.houseInt;
+  }
+  // 注文と溢れ
+  for (const h of S.houses) {
+    h.nextOrder -= dt;
+    if (h.nextOrder <= 0) { addOrder(h); h.nextOrder = CFG.orderInt * (1 + rnd(-1, 1) * CFG.orderJitter); }
+    if (waiting(h) >= CFG.N) { h.overT += dt; if (h.overT >= CFG.G) { gameOver(); return; } }
+    else h.overT = 0;
+  }
+  for (const d of S.drones) droneUpdate(d, dt);
+  // 鼓動
+  if (S.houses.some(h => h.overT > 0)) { S.hbT -= dt; if (S.hbT <= 0) { Snd.thump(); S.hbT = 0.8; } }
+  else S.hbT = 0;
+  // 週のごほうび
+  if (S.weekT >= CFG.week) {
+    S.weekT -= CFG.week; S.week++; Snd.week(); S.reward = true;
+    S.rewardTool = CFG.tools[Math.floor(Math.random() * CFG.tools.length)];
+  }
+}
+// ごほうび: ハブは必ず1つ。そのうえで「ドローン」か「道具」(範囲拡大／航続延長) を選ぶ (Mini Metro の「機関車は必ず + 2択」と同じ形)
+function chooseReward(which) {
+  S.hubStock++;
+  if (which === 'drone') S.drones.push(newDrone());
+  else if (S.rewardTool === 'range') { S.rangeFrom = S.R; S.R += CFG.toolRange; S.rangeT = CFG.rangeAnimT; recomputeReach(); }
+  else if (S.rewardTool === 'reach') S.L += CFG.toolReach;
+  S.reward = false;
+  if (S.week === CFG.milkWeek) activateSource('milk');
+  if (S.week > 1 && (S.week - 1) % CFG.zoneEvery === 0) spawnZone();
+}
+
+// ---- 入力 -----------------------------------------------------------
+let ptr = null, lastTap = null;
+const HUD_H = 6.2;                     // 上の帯の高さ (ここへハブを運ぶと手持ちに戻る)
+const BTN = { pause: { x: 92.3, y: 3.3, r: 2.1 }, speed: { x: 97.0, y: 3.3, r: 2.1 } };
+const CARD = { drone: { x: 38, y: 31, w: 18, h: 16 }, tool: { x: 62, y: 31, w: 18, h: 16 } };
+function hitNode(p, rad) {
+  let best = null, bd = Infinity;
+  for (const n of nodes()) {
+    const dd = dist(p, n), lim = (rad || CFG.nodeHit) + (n.kind === 'src' ? 0.8 : 0);
+    if (dd < lim && dd < bd) { bd = dd; best = n; }
+  }
+  return best;
+}
+function hitEdge(p) {
+  let best = null, bd = Infinity;
+  for (const e of S.edges) { const dd = segPointDist(e.a, e.b, p); if (dd < CFG.edgeHit && dd < bd) { bd = dd; best = e; } }
+  return best;
+}
+function hitButton(p) { for (const k in BTN) if (dist(p, BTN[k]) < BTN[k].r + 0.6) return k; return null; }
+function hitCard(p) {
+  for (const k in CARD) { const c = CARD[k]; if (Math.abs(p.x - c.x) < c.w / 2 && Math.abs(p.y - c.y) < c.h / 2) return k; }
+  return null;
+}
+cv.addEventListener('pointerdown', e => {
+  e.preventDefault(); Snd.unlock();
+  if (ptr) return;                     // 2本目の指は無視
+  const p = toWorld(e);
+  try { cv.setPointerCapture(e.pointerId); } catch (x) {}
+  // mode: 'line' = 空路を引く (ハブ・供給元から動かした) / 'move' = ハブを持ち上げた (長押し)
+  ptr = { id: e.pointerId, sx: p.x, sy: p.y, x: p.x, y: p.y, hit: null, drag: false, mode: null, btn: null, downT: performance.now() };
+  if (S.over || S.reward) return;
+  ptr.btn = hitButton(p); if (ptr.btn) return;
+  const n = hitNode(p); if (n) { ptr.hit = n; return; }
+  const ed = hitEdge(p); if (ed) { ptr.hit = { kind: 'edge', e: ed }; }
+});
+let hover = null;                      // マウスの位置 (置く前の見え方に使う)
+cv.addEventListener('pointerleave', () => { hover = null; });
+cv.addEventListener('pointermove', e => {
+  if (!ptr) { if (e.pointerType === 'mouse') hover = toWorld(e); return; }
+  if (e.pointerId !== ptr.id) return;
+  const p = toWorld(e); ptr.x = p.x; ptr.y = p.y; hover = p;
+  if (!ptr.drag && ptr.hit && ptr.hit.kind !== 'edge' && Math.hypot(p.x - ptr.sx, p.y - ptr.sy) > 0.9) { ptr.drag = true; ptr.mode = 'line'; }
+});
+// 長押し (動かさずに holdT 秒) でハブが持ち上がる = 動かすモード。毎フレーム見る
+function checkHold() {
+  if (!ptr || ptr.drag || !ptr.hit || ptr.hit.kind !== 'hub' || S.over || S.reward) return;
+  if (performance.now() - ptr.downT >= CFG.holdT * 1000) { ptr.drag = true; ptr.mode = 'move'; Snd.lift(); }
+}
+const holdFrac = () => (ptr && !ptr.drag && ptr.hit && ptr.hit.kind === 'hub') ? Math.min(1, (performance.now() - ptr.downT) / (CFG.holdT * 1000)) : 0;
+function pointerEnd(e) {
+  if (!ptr || e.pointerId !== ptr.id) return;
+  const p = toWorld(e); const q = ptr; ptr = null;
+  if (S.over) { if (S.overT > 0.7) newGame(); return; }
+  if (S.reward) { const c = hitCard(p); if (c) chooseReward(c); return; }
+  if (q.btn) {
+    if (hitButton(p) !== q.btn) return;
+    if (q.btn === 'pause') S.paused = !S.paused; else S.speed = S.speed === 1 ? 2 : 1;
+    return;
+  }
+  if (q.drag && q.hit) {
+    const from = q.hit;
+    if (q.mode === 'line') {           // 空路を引く: 別のノードの上で離したときだけ
+      const to = hitNode(p, CFG.snap);
+      if (to && to !== from) { if (!edgeProblem(from, to)) { addEdge(from, to); Snd.place(); } else Snd.nope(); }
+      return;
+    }
+    if (from.kind === 'hub') {         // 持ち上げたハブ
+      if (p.y < HUD_H) { pickUpHub(from); return; }   // 上の帯へ運ぶ = 手持ちに戻す
+      if (dist(from, p) < 0.9) return;                // 持ち上げただけで動かさない = そのまま置く (建て直しにしない)
+      // ハブを動かす (つながる空路も追従)
+      if (hubMoveValid(from, p)) { moveHub(from, p); Snd.place(); } else Snd.nope();
+    }
+    return;
+  }
+  // クリック
+  if (q.hit && q.hit.kind === 'edge') { removeEdge(q.hit.e); Snd.place(); return; }
+  if (q.hit) {                          // ハブを素早く2回 = 手持ちに戻す
+    if (q.hit.kind === 'hub') {
+      const now = performance.now();
+      if (lastTap && lastTap.hub === q.hit && now - lastTap.t < 400) { pickUpHub(q.hit); lastTap = null; }
+      else lastTap = { hub: q.hit, t: now };
+    }
+    return;
+  }
+  if (S.hubStock > 0) {
+    if (hubPosValid(p, null)) { addHub(p.x, p.y); S.hubStock--; Snd.place(); }
+    else Snd.nope();
+  } else S.flash = 0.6;                // 手持ちがない: HUD のハブ数を点滅
+}
+cv.addEventListener('pointerup', pointerEnd);
+cv.addEventListener('pointercancel', e => { if (ptr && e.pointerId === ptr.id) ptr = null; });
+addEventListener('keydown', e => {
+  if (e.key === ' ') { e.preventDefault(); if (!S.over && !S.reward) S.paused = !S.paused; }
+  if (e.key === 'f' || e.key === 'F') S.speed = S.speed === 1 ? 2 : 1;
+  if (e.key === 'r' || e.key === 'R') newGame();
+  if (S.reward && (e.key === '1' || e.key === 'ArrowLeft')) chooseReward('drone');
+  if (S.reward && (e.key === '2' || e.key === 'ArrowRight')) chooseReward('tool');
+});
+
+// ---- 描画 -----------------------------------------------------------
+const C = {
+  grass: '#dcefc8', grass2: '#d0e6b9', field: '#e9e2a8', field2: '#d9d191', pasture: '#cfe7bd',
+  water: '#bfe0f2', water2: '#a9d3ea', road: '#5c6b82',
+  house: '#f6c9a0', houseLine: '#b98a63', roof: '#e8a877',
+  hub: '#ffffff', hubLine: '#4f78b3', range: 'rgba(79,120,179,',
+  wh: '#d8c6a2', whLine: '#8a7353',
+  zone: 'rgba(240,150,150,0.20)', zoneLine: 'rgba(220,110,110,0.65)', zoneIcon: 'rgba(196,84,84,0.85)',
+  drone: '#3b3f47', droneArm: '#5a606b', rotor: 'rgba(59,63,71,0.55)',
+  bad: '#e0534f', ok: '#4f78b3', ink: '#3b3f47',
+};
+function rr(x, y, w, h, r) {
+  ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+}
+function circle(x, y, r) { ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); }
+function text(str, x, y, size, color, align, bold) {
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.font = (bold ? 'bold ' : '') + (size * scale) + 'px system-ui, -apple-system, "Segoe UI", sans-serif';
+  ctx.fillStyle = color; ctx.textAlign = align || 'left'; ctx.textBaseline = 'middle';
+  ctx.fillText(str, ox + x * scale, oy + y * scale); ctx.restore();
+}
+
+// 地形 (飾り。飛行を妨げない)。畑 [14,9,10,7] と牧場 [62,44,16,9] は供給元の足元になる
+const TERRAIN = { fields: [[6, 40, 14, 9], [78, 8, 13, 8], [84, 40, 11, 10], [14, 9, 10, 7]],
+                  pastures: [[62, 44, 16, 9], [22, 30, 9, 8], [70, 24, 10, 7]] };
+function drawTerrain() {
+  ctx.fillStyle = C.grass; ctx.fillRect(0, 0, W, H);
+  // うっすらした草地のむら
+  ctx.fillStyle = C.grass2;
+  for (const [x, y, r] of [[20, 50, 9], [50, 8, 12], [90, 30, 8], [45, 48, 10], [8, 22, 7]]) { circle(x, y, r); ctx.fill(); }
+  // 畑 (縞)
+  for (const [x, y, w, h] of TERRAIN.fields) {
+    ctx.fillStyle = C.field; rr(x, y, w, h, 1.2); ctx.fill();
+    ctx.strokeStyle = C.field2; ctx.lineWidth = 0.25;
+    for (let i = 1.2; i < h; i += 1.2) { ctx.beginPath(); ctx.moveTo(x + 0.8, y + i); ctx.lineTo(x + w - 0.8, y + i); ctx.stroke(); }
+  }
+  // 牧場 (点々)
+  for (const [x, y, w, h] of TERRAIN.pastures) {
+    ctx.fillStyle = C.pasture; rr(x, y, w, h, 2); ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    for (let i = 0; i < 5; i++) { circle(x + 1.5 + ((i * 37) % (w - 3)), y + 1.5 + ((i * 23) % (h - 3)), 0.45); ctx.fill(); }
+  }
+  // 川 (蛇行1本)
+  ctx.strokeStyle = C.water; ctx.lineWidth = 3.2; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(-2, 46); ctx.bezierCurveTo(20, 30, 30, 58, 52, 42);
+  ctx.bezierCurveTo(70, 30, 80, 60, 102, 44); ctx.stroke();
+  ctx.strokeStyle = C.water2; ctx.lineWidth = 0.25; ctx.stroke();
+}
+function drawZoneIcon(z) {
+  ctx.save(); ctx.translate(z.x, z.y); ctx.strokeStyle = C.zoneIcon; ctx.fillStyle = C.zoneIcon;
+  ctx.lineWidth = 0.35; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  const s = Math.min(1, z.r / 8);
+  ctx.scale(s, s);
+  if (z.kind === 'fes') {            // お祭りのテント
+    ctx.beginPath(); ctx.moveTo(-3, 2); ctx.lineTo(0, -2.2); ctx.lineTo(3, 2); ctx.closePath(); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(-1, 2); ctx.lineTo(0, -2.2); ctx.lineTo(1, 2); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, -2.2); ctx.lineTo(0, -3.6); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, -3.6); ctx.lineTo(1.6, -3.1); ctx.lineTo(0, -2.6); ctx.closePath(); ctx.fill();
+  } else if (z.kind === 'bird') {    // 渡り鳥
+    for (const [dx, dy] of [[0, -1.8], [-2.4, 0.4], [2.4, 0.4], [0, 1.8]]) {
+      ctx.beginPath(); ctx.moveTo(dx - 1.3, dy + 0.6); ctx.quadraticCurveTo(dx - 0.6, dy - 0.6, dx, dy + 0.1);
+      ctx.quadraticCurveTo(dx + 0.6, dy - 0.6, dx + 1.3, dy + 0.6); ctx.stroke();
+    }
+  } else {                           // 学校 (角帽)
+    ctx.beginPath(); ctx.moveTo(-3.2, -0.8); ctx.lineTo(0, -2.2); ctx.lineTo(3.2, -0.8); ctx.lineTo(0, 0.6); ctx.closePath(); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(-1.8, -0.2); ctx.lineTo(-1.8, 1.3); ctx.quadraticCurveTo(0, 2.4, 1.8, 1.3); ctx.lineTo(1.8, -0.2); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(3.2, -0.8); ctx.lineTo(3.2, 1.6); ctx.stroke();
+  }
+  ctx.restore();
+}
+function drawZones() {
+  for (const z of S.zones) {
+    const age = Math.min(1, (S.t - z.born) / 0.6);     // ふわっと現れる
+    const r = z.r * (0.6 + 0.4 * age);
+    ctx.fillStyle = C.zone; circle(z.x, z.y, r); ctx.fill();
+    ctx.setLineDash([1.2, 0.9]); ctx.strokeStyle = C.zoneLine; ctx.lineWidth = 0.25; ctx.stroke(); ctx.setLineDash([]);
+    drawZoneIcon(z);
+  }
+}
+// 今描く半径: 範囲拡大の直後は旧→新へ広がる途中の値
+function rangeNow() {
+  if (S.rangeT <= 0) return S.R;
+  const k = 1 - S.rangeT / CFG.rangeAnimT, e = 1 - Math.pow(1 - k, 3);   // ゆっくり止まる
+  return S.rangeFrom + (S.R - S.rangeFrom) * e;
+}
+function drawRange(n, alpha) {
+  const r = rangeNow();
+  ctx.fillStyle = C.range + (0.07 * alpha) + ')'; circle(n.x, n.y, r); ctx.fill();
+  ctx.strokeStyle = C.range + (0.35 * alpha) + ')'; ctx.lineWidth = 0.15; ctx.stroke();
+  if (S.rangeT > 0) {                  // 広がっている間は縁を青く太く光らせ、旧い縁を薄く残す
+    const g = Math.min(1, S.rangeT / CFG.rangeAnimT * 1.6);
+    ctx.strokeStyle = 'rgba(79,120,179,' + (0.9 * g * alpha) + ')'; ctx.lineWidth = 0.45; ctx.stroke();
+    ctx.strokeStyle = 'rgba(79,120,179,' + (0.35 * g * alpha) + ')'; ctx.lineWidth = 0.15; ctx.setLineDash([0.8, 0.6]);
+    circle(n.x, n.y, S.rangeFrom); ctx.stroke(); ctx.setLineDash([]);
+  }
+}
+function drawEdges() {
+  ctx.lineCap = 'round';
+  for (const e of S.edges) {
+    ctx.strokeStyle = C.road; ctx.lineWidth = 0.45;
+    ctx.beginPath(); ctx.moveTo(e.a.x, e.a.y); ctx.lineTo(e.b.x, e.b.y); ctx.stroke();
+  }
+  // 引いている最中の見え方
+  if (ptr && ptr.drag && ptr.hit && ptr.hit.kind !== 'edge') {
+    const from = ptr.hit, p = { x: ptr.x, y: ptr.y };
+    if (ptr.mode === 'line') {
+      const to = hitNode(p, CFG.snap);
+      if (to && to !== from) {         // 相手の上: つなげるなら青、だめなら赤
+        const bad = edgeProblem(from, to);
+        ctx.strokeStyle = bad ? C.bad : C.ok; ctx.lineWidth = 0.5; ctx.setLineDash([1.4, 0.9]);
+        ctx.beginPath(); ctx.moveTo(from.x, from.y); ctx.lineTo(to.x, to.y); ctx.stroke(); ctx.setLineDash([]);
+        if (bad === 'far') {           // 届く長さまでを示す
+          const a = Math.atan2(to.y - from.y, to.x - from.x);
+          ctx.strokeStyle = C.ok; ctx.lineWidth = 0.5;
+          ctx.beginPath(); ctx.moveTo(from.x, from.y); ctx.lineTo(from.x + Math.cos(a) * S.L, from.y + Math.sin(a) * S.L); ctx.stroke();
+        }
+      } else {                         // 空中: 根元から指へ線が伸びる。届く長さまで青、その先は赤
+        const dd = dist(from, p), a = Math.atan2(p.y - from.y, p.x - from.x);
+        const reach = { x: from.x + Math.cos(a) * Math.min(S.L, dd), y: from.y + Math.sin(a) * Math.min(S.L, dd) };
+        const bad = S.zones.some(z => segCircleHit(from, reach, z, z.r));
+        ctx.strokeStyle = bad ? C.bad : C.ok; ctx.lineWidth = 0.5; ctx.setLineDash([1.4, 0.9]);
+        ctx.beginPath(); ctx.moveTo(from.x, from.y); ctx.lineTo(reach.x, reach.y); ctx.stroke();
+        if (dd > S.L) { ctx.strokeStyle = C.bad; ctx.beginPath(); ctx.moveTo(reach.x, reach.y); ctx.lineTo(p.x, p.y); ctx.stroke(); }
+        ctx.setLineDash([]);
+        ctx.fillStyle = bad || dd > S.L ? C.bad : C.ok; circle(p.x, p.y, 0.7); ctx.fill();   // 指先の点
+      }
+    } else if (p.y < HUD_H) {          // 持ち上げたハブが上の帯の上 = 手持ちに戻す (HUD 側で光る)
+    } else {                           // 持ち上げたハブの移動プレビュー
+      const ok = hubMoveValid(from, p);
+      ctx.strokeStyle = ok ? C.ok : C.bad; ctx.lineWidth = 0.4; ctx.setLineDash([1.2, 0.8]);
+      for (const e of S.edges) {
+        const other = e.a === from ? e.b : e.b === from ? e.a : null; if (!other) continue;
+        ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(other.x, other.y); ctx.stroke();
+      }
+      ctx.setLineDash([]);
+      ctx.fillStyle = 'rgba(0,0,0,0.16)'; circle(p.x + 0.5, p.y + 0.9, CFG.hubR * 1.05); ctx.fill();   // 影 = 持ち上がっている
+      ctx.globalAlpha = 0.7; drawRange(p, 1); drawHub(p, ok ? 1 : 0.5, !ok); ctx.globalAlpha = 1;
+    }
+  }
+}
+function dashed(a, b, color, width, phase) {
+  ctx.strokeStyle = color; ctx.lineWidth = width; ctx.setLineDash([1.3, 1.0]); ctx.lineDashOffset = -(phase || 0);
+  ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); ctx.setLineDash([]); ctx.lineDashOffset = 0;
+}
+// 誘導: 孤島のノード (ハブ・未接続の供給元) へ「ここからつなぐ」を動く点線で示す。届かなければ赤く「動かす／間にハブ」を示す
+function drawHints(now) {
+  if (ptr && ptr.drag) return;
+  const orphans = [...S.sources.filter(s => s.on && !s.home), ...S.hubs];
+  for (const h of orphans) {
+    if (h.soon) continue;              // つながっている／建設が終わればつながる = 誘導しない (待つだけ)
+    const src = hintSource(h, h);
+    if (src) {
+      dashed(src, h, 'rgba(79,120,179,0.75)', 0.4, now * 4);
+      const t = (now * 0.5) % 1;                      // 元からノードへ流れる点 (ドラッグの向き)
+      ctx.fillStyle = C.ok; circle(src.x + (h.x - src.x) * t, src.y + (h.y - src.y) * t, 0.55); ctx.fill();
+    } else {
+      const nr = nearestReach(h, h);
+      if (nr) {
+        const dd = dist(nr, h), a = Math.atan2(h.y - nr.y, h.x - nr.x);
+        const edge = { x: nr.x + Math.cos(a) * Math.min(dd, S.L), y: nr.y + Math.sin(a) * Math.min(dd, S.L) };
+        dashed(nr, edge, 'rgba(79,120,179,0.6)', 0.35, 0);
+        if (dd > S.L) dashed(edge, h, 'rgba(224,83,79,0.8)', 0.4, 0);
+      }
+      if (h.kind === 'hub') {                           // 脈打つ赤い輪 = このハブを動かす
+        const k = 2.6 + Math.sin(now * 5) * 0.4;
+        ctx.strokeStyle = 'rgba(224,83,79,0.85)'; ctx.lineWidth = 0.3; ctx.setLineDash([0.9, 0.7]);
+        circle(h.x, h.y, k); ctx.stroke(); ctx.setLineDash([]);
+      }
+    }
+  }
+  // 置く前の見え方: 手持ちがあるとき、ポインタの位置に薄いハブと「つなげる元」
+  const p = ptr ? (ptr.hit || ptr.btn ? null : { x: ptr.x, y: ptr.y }) : hover;
+  if (p && S.hubStock > 0 && !S.reward && !S.over && p.y > 6.2 && !hitNode(p) && !hitEdge(p)) {
+    const okPos = hubPosValid(p, null), src = okPos ? hintSource(p, null) : null;
+    const good = okPos && !!src;
+    if (src) dashed(src, p, 'rgba(79,120,179,0.6)', 0.35, now * 4);
+    else if (okPos) { const nr = nearestReach(p, null); if (nr) dashed(nr, p, 'rgba(224,83,79,0.6)', 0.35, 0); }
+    ctx.globalAlpha = 0.5; drawRange(p, good ? 1 : 0.4); drawHub(p, 1, !good); ctx.globalAlpha = 1;
+  }
+}
+function drawHub(n, alpha, bad) {
+  ctx.globalAlpha *= alpha;
+  const building = n.build > 0;
+  ctx.fillStyle = C.hub; circle(n.x, n.y, CFG.hubR); ctx.fill();
+  ctx.strokeStyle = bad ? C.bad : C.hubLine; ctx.lineWidth = building ? 0.28 : 0.4;
+  if (building) ctx.setLineDash([0.6, 0.5]);
+  ctx.stroke(); ctx.setLineDash([]);
+  if (building) {                      // 建設の進み具合: 中心の点が円弧で満ちていく
+    const f = 1 - n.build / CFG.buildT;
+    ctx.strokeStyle = C.hubLine; ctx.lineWidth = 0.35;
+    ctx.beginPath(); ctx.arc(n.x, n.y, 0.75, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * f); ctx.stroke();
+  } else { ctx.fillStyle = bad ? C.bad : C.hubLine; circle(n.x, n.y, 0.45); ctx.fill(); }
+  ctx.globalAlpha /= alpha;
+}
+// 供給元: 屋根の色が荷物の色。横に荷物の山 (この場所から出る荷物の見本)。未接続は薄く
+function drawSource(s) {
+  const age = s.born ? Math.min(1, (S.t - s.born) / 0.8) : 1;
+  const sz = nodeR(s), k = KINDS[s.goods];
+  const prevA = ctx.globalAlpha;
+  ctx.globalAlpha = prevA * age * (s.reach ? 1 : 0.55);
+  ctx.fillStyle = C.wh; rr(s.x - sz, s.y - sz, sz * 2, sz * 2, 0.7); ctx.fill();
+  ctx.strokeStyle = C.whLine; ctx.lineWidth = 0.4; ctx.stroke();
+  ctx.fillStyle = C.whLine; ctx.fillRect(s.x - 0.9, s.y + 0.3, 1.8, sz - 0.3);   // 戸口
+  ctx.fillStyle = k.roof;
+  ctx.beginPath(); ctx.moveTo(s.x - sz - 0.3, s.y - sz + 0.2); ctx.lineTo(s.x, s.y - sz - 1.4); ctx.lineTo(s.x + sz + 0.3, s.y - sz + 0.2); ctx.closePath(); ctx.fill();
+  for (let i = 0; i < 3; i++) drawPackage(s.x + sz + 1.0 + (i % 2) * 1.05, s.y + sz - 0.6 - Math.floor(i / 2) * 1.05, 0.95, s.goods);
+  if (!s.reach && age < 1) {           // 現れた直後: 広がる輪で目を引く
+    ctx.strokeStyle = k.roof; ctx.lineWidth = 0.4; circle(s.x, s.y, sz + 1 + age * 6); ctx.stroke();
+  }
+  ctx.globalAlpha = prevA;
+}
+// 置く前・動かす前の「仮のハブ」。届くようになる家に輪を出すために毎フレーム求める
+let preview = null;                    // {x, y, ok, self}
+function computePreview() {
+  preview = null;
+  if (S.reward || S.over) return;
+  if (ptr && ptr.drag && ptr.hit && ptr.hit.kind === 'hub') {
+    if (ptr.mode !== 'move') return;   // 空路を引いている途中は出さない
+    const p = { x: ptr.x, y: ptr.y };
+    if (p.y < HUD_H) return;           // 帯へ戻す途中
+    preview = { x: p.x, y: p.y, ok: hubMoveValid(ptr.hit, p), self: ptr.hit };
+    return;
+  }
+  const p = ptr ? (ptr.hit || ptr.btn ? null : { x: ptr.x, y: ptr.y }) : hover;
+  if (p && S.hubStock > 0 && p.y > HUD_H && !hitNode(p) && !hitEdge(p)) {
+    const okPos = hubPosValid(p, null);
+    preview = { x: p.x, y: p.y, ok: okPos && !!hintSource(p, null), self: null };
+  }
+}
+function drawHouse(h, served) {
+  const k = 1 + h.pulse * 0.25;
+  // 仮のハブで届くようになる家 (今は届かない家だけ)
+  const willServe = !served && preview && preview.ok && dist(preview, h) <= S.R + CFG.houseHalf;
+  ctx.save(); ctx.translate(h.x, h.y); ctx.scale(k, k);
+  if (served || willServe) {
+    ctx.fillStyle = C.house; rr(-1.2, -0.9, 2.4, 2.1, 0.5); ctx.fill();
+    ctx.strokeStyle = C.houseLine; ctx.lineWidth = 0.25; ctx.stroke();
+    ctx.fillStyle = C.roof;
+  } else {                             // 届かない家: 色を抜いて点線の枠
+    ctx.fillStyle = '#ece6da'; rr(-1.2, -0.9, 2.4, 2.1, 0.5); ctx.fill();
+    ctx.strokeStyle = '#a89d8c'; ctx.lineWidth = 0.22; ctx.setLineDash([0.5, 0.4]); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = '#d3cbbd';
+  }
+  ctx.beginPath(); ctx.moveTo(-1.45, -0.8); ctx.lineTo(0, -1.9); ctx.lineTo(1.45, -0.8); ctx.closePath(); ctx.fill();
+  ctx.restore();
+  if (willServe) {                     // 青い輪 = このハブで届くようになる
+    ctx.strokeStyle = 'rgba(79,120,179,0.85)'; ctx.lineWidth = 0.3; circle(h.x, h.y, 2.4); ctx.stroke();
+  }
+  // 荷物の山 (家の右横・色は頼んだ荷物の種類) = 家が待っているもの。届いた瞬間に消える (同じ色を抱えたドローンが近づいてくるのが合図)
+  h.orders.forEach((o, i) => {
+    const x = h.x + 2.0 + (i % 3) * 1.15, y = h.y + 0.6 - Math.floor(i / 3) * 1.15;
+    drawPackage(x, y, 0.95, o.kind);
+  });
+  if (h.overT > 0) {                 // 縮む輪
+    const r = 6.5 - (6.5 - 2.2) * (h.overT / CFG.G);
+    ctx.strokeStyle = 'rgba(224,83,79,0.9)'; ctx.lineWidth = 0.35; circle(h.x, h.y, r); ctx.stroke();
+  }
+}
+function drawPackage(x, y, s, kind) {
+  const k = KINDS[kind] || KINDS.mail;
+  ctx.lineWidth = 0.2; ctx.strokeStyle = k.line;
+  ctx.fillStyle = k.fill; ctx.fillRect(x - s / 2, y - s / 2, s, s);
+  ctx.strokeRect(x - s / 2, y - s / 2, s, s);
+  ctx.beginPath(); ctx.moveTo(x, y - s / 2); ctx.lineTo(x, y + s / 2); ctx.stroke();
+}
+// ドローン (真上から見た四つ翼)。飛行中は地面に影・翼が回る。荷物は胴の下に重ねて持つ (ぶら下げない)
+function drawDrone(d, now, x, y, landed) {
+  ctx.save();
+  if (!landed) {                       // 影 = 飛んでいる印
+    ctx.fillStyle = 'rgba(40,50,40,0.16)';
+    ctx.beginPath(); ctx.ellipse(x + 0.7, y + 1.1, 1.05, 0.7, 0, 0, Math.PI * 2); ctx.fill();
+  }
+  const bob = landed ? 0 : Math.sin(now * 6 + d.bob) * 0.08;
+  ctx.translate(x, y + bob);
+  if (landed) ctx.globalAlpha *= 0.75;
+  if (d.carrying) drawPackage(0, 0.15, 1.15, d.order ? d.order.kind : 'mail');   // 荷物は胴の真下
+  ctx.strokeStyle = C.droneArm; ctx.lineWidth = 0.2; ctx.lineCap = 'round';
+  ctx.beginPath();
+  for (const [dx, dy] of [[-0.8, -0.8], [0.8, -0.8], [-0.8, 0.8], [0.8, 0.8]]) { ctx.moveTo(0, 0); ctx.lineTo(dx, dy); }
+  ctx.stroke();
+  ctx.fillStyle = C.drone; rr(-0.55, -0.35, 1.1, 0.7, 0.3); ctx.fill();   // 胴 (横長・小さめ)
+  const spin = landed ? 0 : now * 40;
+  for (const [dx, dy] of [[-0.8, -0.8], [0.8, -0.8], [-0.8, 0.8], [0.8, 0.8]]) {
+    ctx.strokeStyle = C.rotor; ctx.lineWidth = 0.14; circle(dx, dy, 0.5); ctx.stroke();
+    if (!landed) {                     // 回る翼 (2枚羽の残像)
+      ctx.strokeStyle = 'rgba(59,63,71,0.85)'; ctx.lineWidth = 0.16;
+      const a = spin + dx * 3 + dy;
+      ctx.beginPath(); ctx.moveTo(dx - Math.cos(a) * 0.45, dy - Math.sin(a) * 0.45); ctx.lineTo(dx + Math.cos(a) * 0.45, dy + Math.sin(a) * 0.45); ctx.stroke();
+    }
+    ctx.fillStyle = C.drone; circle(dx, dy, 0.12); ctx.fill();
+  }
+  ctx.restore();
+}
+// 節に降りているドローンは重ならないよう節の周りに並べる
+function drawDrones(now) {
+  const slots = new Map();             // node -> count
+  for (const d of S.drones) {
+    if (d.state === 'idle' && d.node) {
+      const i = slots.get(d.node) || 0; slots.set(d.node, i + 1);
+      const a = -Math.PI / 2 + i * (Math.PI * 2 / 6), r = nodeR(d.node) + (d.node.kind === 'src' ? 2.3 : 1.35);   // 建物の屋根に重ねない
+      drawDrone(d, now, d.node.x + Math.cos(a) * r, d.node.y + Math.sin(a) * r, true);
+    } else drawDrone(d, now, d.x, d.y, false);
+  }
+}
+function drawHubIcon(x, y, s) {
+  ctx.fillStyle = C.hub; circle(x, y, s); ctx.fill();
+  ctx.strokeStyle = C.hubLine; ctx.lineWidth = s * 0.25; ctx.stroke();
+  ctx.fillStyle = C.hubLine; circle(x, y, s * 0.28); ctx.fill();
+}
+function drawDroneIcon(x, y, s) {
+  ctx.save(); ctx.translate(x, y); ctx.scale(s, s);
+  ctx.strokeStyle = C.droneArm; ctx.lineWidth = 0.2; ctx.lineCap = 'round';
+  ctx.beginPath();
+  for (const [dx, dy] of [[-0.8, -0.8], [0.8, -0.8], [-0.8, 0.8], [0.8, 0.8]]) { ctx.moveTo(0, 0); ctx.lineTo(dx, dy); }
+  ctx.stroke();
+  ctx.fillStyle = C.drone; rr(-0.55, -0.35, 1.1, 0.7, 0.3); ctx.fill();
+  for (const [dx, dy] of [[-0.8, -0.8], [0.8, -0.8], [-0.8, 0.8], [0.8, 0.8]]) {
+    ctx.strokeStyle = C.rotor; ctx.lineWidth = 0.14; circle(dx, dy, 0.5); ctx.stroke();
+    ctx.fillStyle = C.drone; circle(dx, dy, 0.12); ctx.fill();
+  }
+  ctx.restore();
+}
+function drawHUD() {
+  // 上の帯
+  ctx.fillStyle = 'rgba(255,255,255,0.55)'; ctx.fillRect(0, 0, W, 6.2);
+  // 届けた数
+  // 届けた数: 現れている供給元の荷物を3色重ねた印 (どの荷物でも届けば1つ増える)。届いた瞬間は数字がその色でふくらむ
+  const kinds = ['mail', 'veg', 'milk'].filter(k => { const src = srcOf(k); return src && src.on; });
+  kinds.forEach((k, i) => drawPackage(2.3 + i * 0.75, 3.8 - i * 0.55, 1.8, k));
+  const p = S.deliverT > 0 ? S.deliverT / 0.5 : 0;
+  const col = p > 0 && S.lastKind ? KINDS[S.lastKind].line : C.ink;
+  text(String(S.delivered), 5.4 + (kinds.length - 1) * 0.35, 3.3, 3.2 * (1 + 0.35 * p), col, 'left', true);
+  // 手持ちのハブ (ハブをドラッグ中は「ここに戻せる」と脈打つ。帯の上に来たら強く)
+  const blink = S.flash > 0 && Math.floor(S.flash * 10) % 2 === 0;
+  const carrying = ptr && ptr.drag && ptr.mode === 'move' && ptr.hit && ptr.hit.kind === 'hub';
+  if (carrying) {
+    const over = ptr.y < HUD_H;
+    ctx.fillStyle = over ? 'rgba(79,120,179,0.35)' : 'rgba(79,120,179,0.12)';
+    rr(12.5, 0.6, 9.5, 5.0, 1.2); ctx.fill();
+    ctx.strokeStyle = C.hubLine; ctx.lineWidth = 0.25; ctx.setLineDash([0.8, 0.6]); ctx.stroke(); ctx.setLineDash([]);
+    const k = 1.3 + (over ? 0.5 : 0.25 + Math.sin(performance.now() / 120) * 0.2);
+    drawHubIcon(16, 3.2, k);
+    text(String(S.hubStock + 1), 18.4, 3.3, 3.2, C.hubLine, 'left', true);
+  } else {
+    drawHubIcon(16, 3.2, 1.3); text(String(S.hubStock), 18.4, 3.3, 3.2, blink ? C.bad : C.ink, 'left', true);
+  }
+  // ドローン (待機中 / 総数)
+  drawDroneIcon(28, 3.2, 1.25);
+  const idle = S.drones.filter(d => d.state === 'idle').length;
+  text(idle + '/' + S.drones.length, 30.6, 3.3, 3.2, C.ink, 'left', true);
+  // 週 (円弧で進み具合)
+  const cx = 50, cy = 3.2;
+  ctx.strokeStyle = 'rgba(59,63,71,0.25)'; ctx.lineWidth = 0.5; circle(cx, cy, 1.9); ctx.stroke();
+  ctx.strokeStyle = C.ink; ctx.beginPath(); ctx.arc(cx, cy, 1.9, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * (S.weekT / CFG.week)); ctx.stroke();
+  text(String(S.week), cx + 3.2, cy + 0.1, 3.2, C.ink, 'left', true);
+  // 右上ボタン
+  for (const k in BTN) {
+    const b = BTN[k];
+    const on = (k === 'pause' && S.paused) || (k === 'speed' && S.speed === 2);
+    ctx.fillStyle = on ? C.hubLine : '#ffffff'; circle(b.x, b.y, b.r); ctx.fill();
+    ctx.strokeStyle = C.hubLine; ctx.lineWidth = 0.3; ctx.stroke();
+    ctx.fillStyle = on ? '#ffffff' : C.ink;
+    if (k === 'pause') {
+      if (S.paused) { ctx.beginPath(); ctx.moveTo(b.x - 0.6, b.y - 0.9); ctx.lineTo(b.x + 0.9, b.y); ctx.lineTo(b.x - 0.6, b.y + 0.9); ctx.closePath(); ctx.fill(); }
+      else { ctx.fillRect(b.x - 0.8, b.y - 0.9, 0.55, 1.8); ctx.fillRect(b.x + 0.25, b.y - 0.9, 0.55, 1.8); }
+    } else {
+      for (const dx of [-0.95, 0.15]) { ctx.beginPath(); ctx.moveTo(b.x + dx, b.y - 0.85); ctx.lineTo(b.x + dx + 0.95, b.y); ctx.lineTo(b.x + dx, b.y + 0.85); ctx.closePath(); ctx.fill(); }
+    }
+  }
+}
+// 道具の絵 (文字なし・動く)。range = 範囲の輪が広がるのを繰り返す / reach = 届かなかった赤い線が伸びて遠くのハブに青くつながるのを繰り返す
+function drawToolIcon(kind, x, y, now) {
+  ctx.save(); ctx.translate(x, y); ctx.lineCap = 'round';
+  const ease = k => 1 - Math.pow(1 - Math.max(0, Math.min(1, k)), 3);
+  if (kind === 'range') {
+    const ph = (now % 2.0) / 2.0;                       // 0〜0.25 小さいまま → 0.25〜0.65 広がる → 残り 大きいまま
+    const g = ease((ph - 0.25) / 0.4), r = 3.0 + 1.6 * g;
+    ctx.strokeStyle = C.range + '0.5)'; ctx.lineWidth = 0.15; ctx.setLineDash([0.6, 0.5]); circle(0, 0, 3.0); ctx.stroke(); ctx.setLineDash([]);   // 元の大きさ
+    ctx.fillStyle = C.range + '0.12)'; circle(0, 0, r); ctx.fill();
+    ctx.strokeStyle = 'rgba(79,120,179,' + (0.35 + 0.55 * g) + ')'; ctx.lineWidth = 0.22 + 0.25 * g; ctx.stroke();
+    drawHubIcon(0, 0, 1.3);
+    ctx.fillStyle = C.house;                            // 広がると届くようになる家
+    const hx = 3.9, hy = 0.4;
+    rr(hx - 0.7, hy - 0.5, 1.4, 1.2, 0.3); ctx.fill(); ctx.strokeStyle = C.houseLine; ctx.lineWidth = 0.15; ctx.stroke();
+    ctx.fillStyle = C.roof; ctx.beginPath(); ctx.moveTo(hx - 0.85, hy - 0.45); ctx.lineTo(hx, hy - 1.1); ctx.lineTo(hx + 0.85, hy - 0.45); ctx.closePath(); ctx.fill();
+    if (g > 0.95) { ctx.strokeStyle = 'rgba(79,120,179,0.85)'; ctx.lineWidth = 0.2; circle(hx, hy, 1.4); ctx.stroke(); }
+  } else {
+    const ph = (now % 2.4) / 2.4;                       // 0〜0.3 届かない赤 → 0.3〜0.7 伸びる → 残り 青くつながったまま
+    const A = { x: -5.2, y: 1.4 }, B = { x: 5.2, y: -1.6 };
+    const full = Math.hypot(B.x - A.x, B.y - A.y), short = full * 0.62;
+    const g = ease((ph - 0.3) / 0.4), len = short + (full - short) * g, done = g >= 0.999;
+    const a = Math.atan2(B.y - A.y, B.x - A.x), ex = A.x + Math.cos(a) * len, ey = A.y + Math.sin(a) * len;
+    ctx.strokeStyle = done ? C.road : (g > 0 ? C.ok : C.bad); ctx.lineWidth = 0.45;
+    if (!done) ctx.setLineDash([1.0, 0.7]);
+    ctx.beginPath(); ctx.moveTo(A.x, A.y); ctx.lineTo(ex, ey); ctx.stroke(); ctx.setLineDash([]);
+    if (!done) { ctx.fillStyle = g > 0 ? C.ok : C.bad; circle(ex, ey, 0.5); ctx.fill(); }
+    drawHubIcon(A.x, A.y, 1.1);
+    ctx.globalAlpha = done ? 1 : 0.45; drawHubIcon(B.x, B.y, 1.1); ctx.globalAlpha = 1;
+  }
+  ctx.restore();
+}
+function drawReward(now) {
+  ctx.fillStyle = 'rgba(255,255,255,0.6)'; ctx.fillRect(0, 0, W, H);
+  // 週の区切りの印
+  ctx.strokeStyle = C.ink; ctx.lineWidth = 0.5; circle(50, 10, 2.4); ctx.stroke();
+  text(String(S.week), 50, 10.1, 3.2, C.ink, 'center', true);
+  // ハブは必ず1つ (選ばなくてももらえる。上に置いて見せる)
+  ctx.globalAlpha = 0.5; drawRange({ x: 47.5, y: 17.5 }, 0.9); ctx.globalAlpha = 1;
+  drawHubIcon(47.5, 17.5, 1.8);
+  text('+1', 51.2, 17.6, 3.2, C.ink, 'left', true);
+  // 2択: ドローン / 道具
+  for (const k in CARD) {
+    const c = CARD[k];
+    ctx.fillStyle = '#ffffff'; rr(c.x - c.w / 2, c.y - c.h / 2, c.w, c.h, 1.5); ctx.fill();
+    ctx.strokeStyle = C.hubLine; ctx.lineWidth = 0.35; ctx.stroke();
+    if (k === 'drone') { drawDroneIcon(c.x, c.y - 1.5, 2.6); text('+1', c.x, c.y + 5.2, 3.6, C.ink, 'center', true); }
+    else drawToolIcon(S.rewardTool, c.x, c.y - 0.5, now);
+  }
+}
+function drawOver() {
+  const a = Math.min(1, S.overT / 0.6);
+  ctx.fillStyle = 'rgba(52,58,72,' + (0.55 * a) + ')'; ctx.fillRect(0, 0, W, H);
+  ctx.globalAlpha = a;
+  drawPackage(50 - 4.5, 22, 4.2, 'mail');
+  text(String(S.delivered), 50 - 1.2, 22.2, 8, '#ffffff', 'left', true);
+  // やり直しの印 (円弧と矢じり)
+  const cx = 50, cy = 36;
+  ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 0.7; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.arc(cx, cy, 3, -Math.PI * 0.35, Math.PI * 1.35); ctx.stroke();
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath(); ctx.moveTo(cx + 1.3, cy - 3.6); ctx.lineTo(cx + 3.4, cy - 1.3); ctx.lineTo(cx + 0.6, cy - 1.1); ctx.closePath(); ctx.fill();
+  ctx.globalAlpha = 1;
+}
+function draw(now) {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = '#b9d2a6'; ctx.fillRect(0, 0, cv.width, cv.height);
+  ctx.setTransform(scale, 0, 0, scale, ox, oy);
+  ctx.save(); ctx.beginPath(); ctx.rect(0, 0, W, H); ctx.clip();
+  drawTerrain();
+  drawZones();
+  // サービス範囲 (供給元も受け持つ)
+  for (const s of S.sources) if (s.on) drawRange(s, s.reach ? 1 : 0.35);
+  for (const h of S.hubs) drawRange(h, h.reach ? 1 : (h.build > 0 ? 0.35 + 0.5 * (1 - h.build / CFG.buildT) : 0.35));
+  drawEdges();
+  drawHints(now);
+  computePreview();
+  for (const h of S.houses) drawHouse(h, !!servingHub(h));
+  for (const s of S.sources) if (s.on) drawSource(s);
+  for (const h of S.hubs) drawHub(h, h.reach ? 1 : 0.4, false);
+  const hf = holdFrac();               // 長押しの進み具合: 輪が満ちると持ち上がる
+  if (hf > 0.15) {
+    const h = ptr.hit;
+    ctx.strokeStyle = 'rgba(79,120,179,0.9)'; ctx.lineWidth = 0.35;
+    ctx.beginPath(); ctx.arc(h.x, h.y, CFG.hubR + 0.9, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * hf); ctx.stroke();
+  }
+  drawDrones(now);
+  drawHUD();
+  if (S.reward) drawReward(now);
+  if (S.over) drawOver();
+  ctx.restore();
+}
+
+// ---- ループ ---------------------------------------------------------
+newGame();
+let last = performance.now();
+function frame(now) {
+  if (cv.width !== Math.round(innerWidth * (window.devicePixelRatio || 1)) ||
+      cv.height !== Math.round(innerHeight * (window.devicePixelRatio || 1))) resize();   // resize イベントを取りこぼしても追従
+  let dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (document.hidden) dt = 0;
+  checkHold();
+  update(dt * S.speed);
+  draw(now / 1000);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
