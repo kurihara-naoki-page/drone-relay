@@ -141,6 +141,7 @@ function newGame() {
   addOrder(S.houses[0], 'veg');
   for (let i = 0; i < CFG.startDrones; i++) S.drones.push(newDrone());
   recomputeReach();
+  ptr = null; lastTap = null; hover = null; preview = null;   // 途中の操作 (ドラッグ中の R 等) を持ち越さない。前の局のハブへ空路が引けてしまう (2026-09-10 耐久試験で発見)
 }
 function newDrone() {
   return { x: S.WH.x, y: S.WH.y, ang: 0, state: 'idle', node: S.WH, path: null, pathI: 0, onEdge: null,
