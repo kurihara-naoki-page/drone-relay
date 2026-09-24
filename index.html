@@ -595,8 +595,11 @@ function pointerEnd(e) {
   const p = toWorld(e); const q = ptr; ptr = null;
   if (S.info) {                        // 小窓: リンクの上で離せば方針のページを新しいタブで開く。どこで離しても閉じる
     if (Math.abs(p.x - INFO_LINK.x) < INFO_LINK.w / 2 && Math.abs(p.y - INFO_LINK.y) < INFO_LINK.h / 2) {
-      let w = null; try { w = window.open('privacy.html', '_blank', 'noopener'); } catch (x) {}
-      if (!w) location.href = 'privacy.html';   // 新しいタブを開けない環境 (ポップアップ禁止の枠内など) では同じタブで開く
+      // 'noopener' を付けると開けても null が返るため、下の予備が毎回動き、遊んでいる画面まで方針のページに替わっていた (2026-09-24 に発見)。
+      // 付けずに開き、開けたら opener を切る。null = 開けなかった (ポップアップ禁止の枠内など) ときだけ同じタブで開く
+      let w = null; try { w = window.open('privacy.html', '_blank'); } catch (x) {}
+      if (w) { try { w.opener = null; } catch (x) {} }
+      else location.href = 'privacy.html';
     }
     S.info = false; return;
   }
