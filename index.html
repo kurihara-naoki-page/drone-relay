@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>Drone Relay</title>
 <style>
-  html, body { margin: 0; height: 100%; background: #c9dfb8; overflow: hidden;
+  html, body { margin: 0; height: 100%; background: #a9c98f; overflow: hidden;
     touch-action: none; -webkit-user-select: none; user-select: none; }
   canvas { display: block; width: 100vw; height: 100vh; touch-action: none; cursor: crosshair; }
 </style>
@@ -36,7 +36,7 @@ const CFG = {
   rangeAnimT: 1.4,       // 範囲拡大を使った直後、そのハブの円が旧→新の大きさへ広がる動きの秒数
   milkWeek: 2,           // 牧場 (牛乳) が現れる週 (試作2)
   speed: 100 / 6,        // ドローン速度: 画面幅を約6秒で横断
-  startHubStock: 1,      // 開始時の手持ちハブ (配置済み1 + 手持ち1)
+  startHubStock: 2,      // 開始時の手持ちハブ (配置済み1 + 手持ち2)。2026-09-25: 最初から届かない家を 1 軒足したので 1→2 (試験中)
   startDrones: 3,
   houseInt0: 22, houseShrink: 0.97, houseIntMin: 8,   // 家の追加間隔 (Mini Metro の駅の間隔に近づけた。週に2〜4軒)
   nearBias: 0.65, nearRmin: 0.7, nearRmax: 1.9,       // 家は「すでに覆っている範囲の近く」に生えやすい (確率・範囲 R の倍率)
@@ -69,24 +69,26 @@ const TOWNS = {
   base: {
     src: { mail: [35, 28], veg: [19, 12.5], milk: [70, 48.5] },
     firstHub: [55, 22],
-    startHouses: [[60, 27, 'mail'], [29, 35, 'mail'], [18, 20, 'veg']],   // 開始時の家と最初の注文 (最初の1分を静かにしない)
-    sea: null, rocks: [], letterbox: '#b9d2a6',
+    // 開始時の家と最初の注文 (最初の1分を静かにしない)。最後の 1 軒は最初から届かない家 (2026-09-25 本人の提案・DECISIONS #050 更新):
+    // 始めた直後に「手持ちのハブをどこに置いて届かせるか」を考えさせる。網から 13〜15 離れ、ハブ 1 つで届かせる置き場を選べる位置 (pick_start_house.py)
+    startHouses: [[60, 27, 'mail'], [29, 35, 'mail'], [18, 20, 'veg'], [68, 17, 'mail']],
+    sea: null, rocks: [], letterbox: '#a9c98f',
     // 蛇行する川 1 本 (3 次ベジェ 2 本・半幅 1.6)。川の上にはハブも家も置けない (2026-09-24 本人の提案で川向こうの町とそろえた)。空路は越えられる
     river: { curves: [[[-2, 46], [20, 30], [30, 58], [52, 42]], [[52, 42], [70, 30], [80, 60], [102, 44]]], r: 1.6 },
   },
   island: {
     src: { mail: [26, 32], veg: [14, 12], milk: [82, 47] },
     firstHub: [40, 35],
-    startHouses: [[43, 30, 'mail'], [22, 36, 'mail'], [8, 11, 'veg']],
+    startHouses: [[43, 30, 'mail'], [22, 36, 'mail'], [8, 11, 'veg'], [12, 27, 'mail']],   // 最後の 1 軒 = 最初から届かない家 (今の町の注を参照)
     // 海 = 帯 [x1, y1, x2, y2, 半幅] の重なり (端は丸い)。南北の海峡 4 本 = 西の陸 (畑・倉庫) と東の陸 (牧場)
     sea: [[56, -3, 58.5, 14, 13], [58.5, 14, 61, 30, 12.5], [61, 30, 59, 45, 15], [59, 45, 57, 60, 15]],
     rocks: [[58.5, 15, 2.3], [60, 43, 2.3]],   // 北の岩 (両岸から 14.7・14.0) / 南の岩 (17.5・15.1。最初のハブから 21.5・牧場まで 22.4)
     fields: [[9, 7.5, 10, 6], [30, 49, 8, 4.5], [80, 9.5, 9, 5]], pastures: [[76, 43, 12, 7], [84, 36, 9, 6], [4, 30, 8, 6]],
     waves: [[57, 8], [63, 22], [56, 34], [61, 52], [52, 47], [66, 38]],
-    // 最初の手持ちのハブは今の町と同じ 1 (startHubStock を持たない = CFG の値)。ボットに合わせて 3 → 本人の試遊で 2 → 2 でも
+    // 最初の手持ちのハブは今の町と同じ (startHubStock を持たない = CFG の値。2026-09-25 に最初から届かない家を足して 1→2)。以下は 1 に決めた経緯:ボットに合わせて 3 → 本人の試遊で 2 → 2 でも
     // 週 7〜9 に 1 個余り、範囲の外の家は 0 軒・ごほうびはほぼドローン (2026-09-23 夜 本人の試遊) だったので 1 にした。
     // ボットは手持ち 1 で週 4 ごろに崩れるが、人はボットよりハブ 1〜2 個分うまく置く (README「確認記録」)
-    letterbox: '#b9d2a6',
+    letterbox: '#a9c98f',
   },
   // 3 つ目の町 = 「飛行場の町」(2026-09-24 本人裁定・案 1)。新しいルール = 空港のまわりの空域 (動かない・1 つ) は、空路も家へ届ける一跳びも通れない
   // (ハブも家も置けない)。滑走路は町の真ん中を東西に横切り、空港の向こう (北) へは東か西を回って網を届ける。川はない。数字は他の町と同じ。
@@ -95,8 +97,8 @@ const TOWNS = {
   airport: {
     src: { mail: [44, 43], veg: [24, 47], milk: [50, 12] },
     firstHub: [62, 45],
-    startHouses: [[66, 39, 'mail'], [36, 38, 'mail'], [18, 40, 'veg']],
-    sea: null, rocks: [], letterbox: '#b9d2a6',
+    startHouses: [[66, 39, 'mail'], [36, 38, 'mail'], [18, 40, 'veg'], [76, 44, 'mail']],   // 最後の 1 軒 = 最初から届かない家
+    sea: null, rocks: [], letterbox: '#a9c98f',
     zones: [[36, 28, 66, 28, 6]],      // 空域 = 滑走路の中心線 (36,28)→(66,28) から半径 6
     fields: [[19, 43, 10, 7], [4, 12, 12, 8], [80, 44, 13, 8]], pastures: [[43, 8, 14, 8], [84, 10, 11, 8], [6, 28, 9, 7]],
   },
@@ -574,7 +576,7 @@ function droneUpdate(d, dt) {
       const h = d.order.house;
       if (moveTo(d, h.x, h.y, dt)) {
         h.orders = h.orders.filter(o => o !== d.order);
-        S.lastKind = d.order.kind; S.deliverT = 0.5;
+        S.lastKind = d.order.kind; S.deliverT = 0.5; h.ding = 1; h.dingKind = d.order.kind;   // ding = 届いた輪 (見た目だけ)
         d.order = null; d.src = null; d.carrying = false; S.delivered++; h.pulse = 1; Snd.chime();
         if (d.hub && d.hub.reach && active(d.hub)) d.state = 'backHub';
         else { d.hub = null; d.node = null; d.state = 'direct'; }   // 戻る先のハブが消えていれば倉庫へ直帰
@@ -645,7 +647,8 @@ function update(dt) {
   S.toolHint = Math.max(0, S.toolHint - dt); S.toolNew = Math.max(0, S.toolNew - dt);
   for (const h of S.hubs) if (h.growT > 0) h.growT = Math.max(0, h.growT - dt);
   S.deliverT = Math.max(0, S.deliverT - dt);
-  for (const h of S.houses) h.pulse = Math.max(0, h.pulse - dt * 3);
+  for (const h of S.houses) { h.pulse = Math.max(0, h.pulse - dt * 3); if (h.ding > 0) h.ding = Math.max(0, h.ding - dt * 2); }
+  for (const h of S.hubs) if (h.pop > 0) h.pop = Math.max(0, h.pop - dt * 2.5);   // 建ち上がった輪 (見た目だけ)
   if (S.over) {
     S.overT += dt;
     if (S.newTown && !S.unlockSnd && S.overT >= UNLOCK_T) { S.unlockSnd = true; Snd.unlock(); }
@@ -655,7 +658,7 @@ function update(dt) {
   S.t += dt; S.weekT += dt;
   // 建設中のハブ
   let built = false;
-  for (const h of S.hubs) if (h.build > 0) { h.build -= dt; if (h.build <= 0) { h.build = 0; built = true; } }
+  for (const h of S.hubs) if (h.build > 0) { h.build -= dt; if (h.build <= 0) { h.build = 0; h.pop = 1; built = true; } }
   if (built) { recomputeReach(); Snd.tone(660, 0.1, 'triangle', 0.07); Snd.tone(990, 0.2, 'triangle', 0.07, 0.09); }
   // 家が増える
   S.nextHouse -= dt;
@@ -864,18 +867,24 @@ addEventListener('keydown', e => {
 });
 
 // ---- 描画 -----------------------------------------------------------
+// 色 (2026-09-25 DECISIONS #050: 簡素な絵柄のまま仕上げる)。地面は 1 色の草地、主役 (家・ハブ・空路・荷物・ドローン) は濃く、
+// 飾り (木・畑・牧場) は地面に近い色。影は全部同じ向き (右下) で 1 色
 const C = {
-  grass: '#dcefc8', grass2: '#d0e6b9', field: '#e9e2a8', field2: '#d9d191', pasture: '#cfe7bd',
-  water: '#bfe0f2', water2: '#a9d3ea', road: '#5c6b82',
-  sea: '#b4d8ec', shallow: '#c6e3f1', wave: 'rgba(255,255,255,0.55)', sand: '#efe3bf',
-  rock: '#b7b0a3', rockLine: '#8f877a', rockTop: '#cdc7bb',
-  house: '#f6c9a0', houseLine: '#b98a63', roof: '#e8a877',
-  hub: '#ffffff', hubLine: '#4f78b3', range: 'rgba(79,120,179,',
-  wh: '#d8c6a2', whLine: '#8a7353',
-  zone: 'rgba(240,150,150,0.20)', zoneLine: 'rgba(220,110,110,0.65)', zoneIcon: 'rgba(196,84,84,0.85)',
-  drone: '#3b3f47', droneArm: '#5a606b', rotor: 'rgba(59,63,71,0.55)',
-  bad: '#e0534f', ok: '#4f78b3', ink: '#3b3f47',
+  grass: '#cde5ae', field: '#ecdf9f', field2: '#d8c77b', pasture: '#bfe0a4',
+  water: '#8ecbe9', water2: '#6aaed3', waterHi: 'rgba(255,255,255,0.45)', road: '#34445e', roadCase: 'rgba(255,255,255,0.9)',
+  sea: '#8ecbe9', shallow: '#b4dcf0', wave: 'rgba(255,255,255,0.75)', sand: '#eedfb0',
+  rock: '#a39c8f', rockLine: '#6f685c', rockTop: '#c6bfb2',
+  house: '#fff3e2', houseLine: '#8c5a3c', roof: '#e0764a',
+  hub: '#ffffff', hubLine: '#2f63b0', range: 'rgba(47,99,176,',
+  wh: '#f3e4c4', whLine: '#6b5234',
+  zone: 'rgba(240,120,120,0.18)', zoneLine: 'rgba(214,86,86,0.75)', zoneIcon: 'rgba(196,70,70,0.9)',
+  drone: '#2b2f36', droneArm: '#474d57', rotor: 'rgba(43,47,54,0.5)',
+  bad: '#e0443f', ok: '#2f63b0', ink: '#2b2f36',
+  shadow: 'rgba(40,66,30,0.22)', tree: '#6aa95a', treeDark: '#548f47', treeHi: '#8cc278',
 };
+function shadowOf(x, y, rx, ry) {      // 影 (右下へずらした楕円)
+  ctx.fillStyle = C.shadow; ctx.beginPath(); ctx.ellipse(x + 0.35, y + 0.5, rx, ry, 0, 0, Math.PI * 2); ctx.fill();
+}
 function rr(x, y, w, h, r) {
   ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
   ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
@@ -906,10 +915,50 @@ function seaBand(s, grow) {            // 端の丸い帯 (長さ 0 なら円)
   const a = Math.atan2(s.b.y - s.a.y, s.b.x - s.a.x), r = s.r + grow;
   ctx.beginPath(); ctx.arc(s.a.x, s.a.y, r, a + Math.PI / 2, a + Math.PI * 1.5); ctx.arc(s.b.x, s.b.y, r, a - Math.PI / 2, a + Math.PI / 2); ctx.closePath();
 }
+// 木立 (飾り・2026-09-25)。町ごとに決まった位置 (乱数は使わない = 遊びの乱数を動かさない)。陸で、畑・牧場・空域・供給元から離れた所だけ。
+// 家・ハブ・供給元のそばの木は描かない (家が建つと木が退く)。飛行も配置も妨げない
+function hash3(a, b, c) {
+  let h = Math.imul(a * 7919 + b * 104729 + c * 1299709 + 1, 2654435761);
+  h = Math.imul(h ^ (h >>> 15), 2246822507); h = Math.imul(h ^ (h >>> 13), 3266489909);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+const TREE_CACHE = {};
+function townTrees() {
+  if (TREE_CACHE[TOWN_ID]) return TREE_CACHE[TOWN_ID];
+  const seed = { base: 1, island: 2, airport: 3 }[TOWN_ID] || 9;
+  const rects = [...(TOWN.fields || TERRAIN.fields), ...(TOWN.pastures || TERRAIN.pastures)];
+  const inRect = (x, y, m) => rects.some(([rx, ry, rw, rh]) => x > rx - m && x < rx + rw + m && y > ry - m && y < ry + rh + m);
+  const srcs = Object.values(TOWN.src);
+  const zones = (TOWN.zones || []).map(([ax, ay, bx, by, r]) => ({ a: { x: ax, y: ay }, b: { x: bx, y: by }, r }));
+  const out = [];
+  for (let g = 0; g < 26; g++) {       // 木立 26 か所 × 木 3〜7 本
+    const cx = 3 + hash3(seed, g, 1) * (W - 6), cy = 8 + hash3(seed, g, 2) * (H - 10), n = 3 + Math.floor(hash3(seed, g, 3) * 5);
+    for (let i = 0; i < n; i++) {
+      const a = hash3(seed, g * 16 + i, 4) * Math.PI * 2, d = Math.sqrt(hash3(seed, g * 16 + i, 5)) * 2.6;
+      const x = cx + Math.cos(a) * d, y = cy + Math.sin(a) * d * 0.8, r = 0.62 + hash3(seed, g * 16 + i, 6) * 0.38;
+      if (x < 1 || x > W - 1 || y < 7.4 || y > H - 1) continue;
+      if (inSea({ x, y }, 1.2) || inRect(x, y, 0.8)) continue;
+      if (zones.some(z => segPointDist(z.a, z.b, { x, y }) < z.r + 1)) continue;
+      if (srcs.some(s => Math.hypot(x - s[0], y - s[1]) < 5)) continue;
+      if (out.some(t => Math.hypot(t.x - x, t.y - y) < 1.05)) continue;
+      out.push({ x, y, r });
+    }
+  }
+  out.sort((p, q) => p.y - q.y);       // 奥 (上) から描く
+  return (TREE_CACHE[TOWN_ID] = out);
+}
+function drawTrees(avoid) {
+  const trees = townTrees();
+  for (const t of trees) {
+    if (avoid.some(p => Math.hypot(p.x - t.x, p.y - t.y) < 2.7)) continue;
+    shadowOf(t.x, t.y, t.r * 0.95, t.r * 0.7);
+    ctx.fillStyle = C.treeDark; circle(t.x, t.y + 0.12, t.r); ctx.fill();
+    ctx.fillStyle = C.tree; circle(t.x - 0.08, t.y - 0.05, t.r * 0.86); ctx.fill();
+    ctx.fillStyle = C.treeHi; circle(t.x - t.r * 0.3, t.y - t.r * 0.32, t.r * 0.36); ctx.fill();
+  }
+}
 function drawIslands() {
   ctx.fillStyle = C.grass; ctx.fillRect(0, 0, W, H);
-  ctx.fillStyle = C.grass2;
-  for (const [x, y, r] of [[20, 50, 9], [38, 10, 10], [90, 45, 8], [45, 28, 7], [85, 16, 7]]) { circle(x, y, r); ctx.fill(); }
   for (const [fill, grow] of [[C.sand, 0.7], [C.shallow, 0], [C.sea, -1.6]]) { ctx.fillStyle = fill; for (const s of SEA) { seaBand(s, grow); ctx.fill(); } }
   ctx.strokeStyle = C.wave; ctx.lineWidth = 0.22; ctx.lineCap = 'round';   // 波 (位置は固定)
   for (const [x, y] of TOWN.waves) {
@@ -932,12 +981,9 @@ function drawIslands() {
     ctx.fillStyle = C.rockTop; circle(x - r * 0.3, y - r * 0.3, r * 0.45); ctx.fill();
   }
 }
-function drawTerrain() {
-  if (TOWN.sea) { drawIslands(); return; }
+function drawTerrain(avoid) {
+  if (TOWN.sea) { drawIslands(); drawTrees(avoid || []); return; }
   ctx.fillStyle = C.grass; ctx.fillRect(0, 0, W, H);
-  // うっすらした草地のむら
-  ctx.fillStyle = C.grass2;
-  for (const [x, y, r] of [[20, 50, 9], [50, 8, 12], [90, 30, 8], [45, 48, 10], [8, 22, 7]]) { circle(x, y, r); ctx.fill(); }
   // 畑 (縞)。飛行場の町は町ごとの位置 (空港にかからない所)
   for (const [x, y, w, h] of TOWN.fields || TERRAIN.fields) {
     ctx.fillStyle = C.field; rr(x, y, w, h, 1.2); ctx.fill();
@@ -953,13 +999,15 @@ function drawTerrain() {
   if (TOWN.zones) drawAirport();
   // 川 (蛇行1本・TOWN.river と同じ線。ハブも家も置けない)
   const rv = TOWN.river;
-  if (rv) {
-    ctx.strokeStyle = C.water; ctx.lineWidth = rv.r * 2; ctx.lineCap = 'round';
+  if (rv) {                            // 岸 (濃い青の縁) → 水 → 流れの光
+    ctx.lineCap = 'round';
     ctx.beginPath(); ctx.moveTo(rv.curves[0][0][0], rv.curves[0][0][1]);
     for (const c of rv.curves) ctx.bezierCurveTo(c[1][0], c[1][1], c[2][0], c[2][1], c[3][0], c[3][1]);
-    ctx.stroke();
-    ctx.strokeStyle = C.water2; ctx.lineWidth = 0.25; ctx.stroke();
+    ctx.strokeStyle = C.water2; ctx.lineWidth = rv.r * 2 + 0.5; ctx.stroke();
+    ctx.strokeStyle = C.water; ctx.lineWidth = rv.r * 2; ctx.stroke();
+    ctx.strokeStyle = C.waterHi; ctx.lineWidth = 0.28; ctx.setLineDash([2.2, 3.4]); ctx.stroke(); ctx.setLineDash([]);
   }
+  drawTrees(avoid || []);
 }
 // 飛行場 (飾り。空域の中): 敷地・滑走路・待合の建物・管制塔。空域の帯はこの上に重ねる。
 // 家 (幅約 2.9) と同じ「記号の大きさ」で描く (2026-09-24 本人の指摘: 家に対して飛行機が小さすぎた)。滑走路の幅 4.4・待合 9×2.6・管制塔は家より大きく
@@ -993,7 +1041,7 @@ function drawPlane(x, y, ang, s) {     // 滑走路の上の飛行機 (機首 = 
   };
   ctx.fillStyle = 'rgba(0,0,0,0.12)'; ctx.save(); ctx.translate(0.25, 0.35); body(); ctx.fill(); ctx.restore();   // 影
   body(); ctx.fillStyle = '#ffffff'; ctx.fill(); ctx.strokeStyle = '#7d848f'; ctx.lineWidth = 0.1; ctx.lineJoin = 'round'; ctx.stroke();
-  ctx.fillStyle = '#4f78b3';                                                         // 尾翼と操縦席の窓
+  ctx.fillStyle = '#2f63b0';                                                         // 尾翼と操縦席の窓
   ctx.beginPath(); ctx.moveTo(-2.35, 0); ctx.lineTo(-2.85, -1.25); ctx.lineTo(-3.25, -1.25); ctx.lineTo(-3.05, 0); ctx.lineTo(-3.25, 1.25); ctx.lineTo(-2.85, 1.25); ctx.closePath(); ctx.fill();
   ctx.fillStyle = '#7fa6c9'; rr(1.85, -0.26, 0.55, 0.52, 0.2); ctx.fill();
   ctx.restore();
@@ -1040,22 +1088,44 @@ function rangeNow(n) {
   const k = 1 - n.growT / CFG.rangeAnimT, e = 1 - Math.pow(1 - k, 3);   // ゆっくり止まる
   return S.R + (CFG.bigR - S.R) * e;
 }
-function drawRange(n, alpha, rr0) {    // rr0 = 半径の指定 (動かす前の仮のハブなど、実物と同じ広さで見せるとき)
+// 届く範囲 (2026-09-25): つながっているハブと供給元の範囲は 1 枚の面に合わせて描く (重なっても濃くならない・外周だけに縁)。
+// 別の画面 (cov) に円を塗って合わせ、薄く重ねる。つながっていない・建設中のハブと、置く前の仮のハブは drawRange で 1 つずつ
+let covCv = null, covCtx = null;
+function drawCoverage(list) {
+  if (!list.length) return;
+  if (!covCv) { covCv = document.createElement('canvas'); covCtx = covCv.getContext('2d'); }
+  if (covCv.width !== cv.width || covCv.height !== cv.height) { covCv.width = cv.width; covCv.height = cv.height; }
+  const c = covCtx, pass = (grow, mode) => {
+    c.globalCompositeOperation = mode; c.fillStyle = '#2f63b0';
+    for (const n of list) { c.beginPath(); c.arc(n.x, n.y, rangeNow(n) + grow, 0, Math.PI * 2); c.fill(); }
+  };
+  const put = alpha => { ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = alpha; ctx.drawImage(covCv, 0, 0); ctx.restore(); };
+  const clear = () => { c.globalCompositeOperation = 'source-over'; c.setTransform(1, 0, 0, 1, 0, 0); c.clearRect(0, 0, covCv.width, covCv.height); c.setTransform(scale, 0, 0, scale, ox, oy); };
+  clear(); pass(0, 'source-over'); put(0.11);                             // 面 (重なっても同じ濃さ)
+  clear(); pass(0.22, 'source-over'); pass(0, 'destination-out'); put(0.6);   // 外周の縁 = 合わせた面の外側 0.22 だけ
+  c.globalCompositeOperation = 'source-over';
+  for (const n of list) if (n.growT > 0) drawRange(n, 1, null, true);   // 広がっている途中の光る縁
+}
+function drawRange(n, alpha, rr0, edgeOnly) {   // rr0 = 半径の指定 (動かす前の仮のハブなど、実物と同じ広さで見せるとき)
   const r = rr0 || rangeNow(n);
-  ctx.fillStyle = C.range + (0.07 * alpha) + ')'; circle(n.x, n.y, r); ctx.fill();
-  ctx.strokeStyle = C.range + (0.35 * alpha) + ')'; ctx.lineWidth = 0.15; ctx.stroke();
+  circle(n.x, n.y, r);
+  if (!edgeOnly) {
+    ctx.fillStyle = C.range + (0.08 * alpha) + ')'; ctx.fill();
+    ctx.strokeStyle = C.range + (0.55 * alpha) + ')'; ctx.lineWidth = 0.18; ctx.setLineDash([0.9, 0.6]); ctx.stroke(); ctx.setLineDash([]);
+  }
   if (n.growT > 0) {                   // 広がっている間は縁を青く太く光らせ、旧い縁を薄く残す
     const g = Math.min(1, n.growT / CFG.rangeAnimT * 1.6);
-    ctx.strokeStyle = 'rgba(79,120,179,' + (0.9 * g * alpha) + ')'; ctx.lineWidth = 0.45; ctx.stroke();
-    ctx.strokeStyle = 'rgba(79,120,179,' + (0.35 * g * alpha) + ')'; ctx.lineWidth = 0.15; ctx.setLineDash([0.8, 0.6]);
+    ctx.strokeStyle = 'rgba(47,99,176,' + (0.9 * g * alpha) + ')'; ctx.lineWidth = 0.45; ctx.stroke();
+    ctx.strokeStyle = 'rgba(47,99,176,' + (0.35 * g * alpha) + ')'; ctx.lineWidth = 0.15; ctx.setLineDash([0.8, 0.6]);
     circle(n.x, n.y, S.R); ctx.stroke(); ctx.setLineDash([]);
   }
 }
 function drawEdges() {
   ctx.lineCap = 'round';
-  for (const e of S.edges) {
-    ctx.strokeStyle = C.road; ctx.lineWidth = 0.45;
-    ctx.beginPath(); ctx.moveTo(e.a.x, e.a.y); ctx.lineTo(e.b.x, e.b.y); ctx.stroke();
+  for (const e of S.edges) {           // 空路 = 白い縁取りの濃い線 (どの地面の上でも読める)
+    ctx.beginPath(); ctx.moveTo(e.a.x, e.a.y); ctx.lineTo(e.b.x, e.b.y);
+    ctx.strokeStyle = C.roadCase; ctx.lineWidth = 0.95; ctx.stroke();
+    ctx.strokeStyle = C.road; ctx.lineWidth = 0.55; ctx.stroke();
   }
   // 引いている最中の見え方
   if (ptr && ptr.drag && ptr.hit && ptr.hit.kind !== 'edge' && ptr.mode !== 'tool') {
@@ -1108,8 +1178,8 @@ function drawHints(now) {
     const a = Math.min(1, S.toolHint / 0.6);
     for (const h of S.hubs) {
       if (h.big) continue;
-      dashed(TOOL_BTN, h, 'rgba(79,120,179,' + (0.7 * a) + ')', 0.35, now * 4);
-      ctx.strokeStyle = 'rgba(79,120,179,' + (0.8 * a) + ')'; ctx.lineWidth = 0.3;
+      dashed(TOOL_BTN, h, 'rgba(47,99,176,' + (0.7 * a) + ')', 0.35, now * 4);
+      ctx.strokeStyle = 'rgba(47,99,176,' + (0.8 * a) + ')'; ctx.lineWidth = 0.3;
       circle(h.x, h.y, CFG.hubR + 0.9 + Math.sin(now * 5) * 0.3); ctx.stroke();
     }
   }
@@ -1118,7 +1188,7 @@ function drawHints(now) {
     if (h.soon) continue;              // つながっている／建設が終わればつながる = 誘導しない (待つだけ)
     const src = hintSource(h, h);
     if (src) {
-      dashed(src, h, 'rgba(79,120,179,0.75)', 0.4, now * 4);
+      dashed(src, h, 'rgba(47,99,176,0.75)', 0.4, now * 4);
       const t = (now * 0.5) % 1;                      // 元からノードへ流れる点 (ドラッグの向き)
       ctx.fillStyle = C.ok; circle(src.x + (h.x - src.x) * t, src.y + (h.y - src.y) * t, 0.55); ctx.fill();
     } else {
@@ -1126,12 +1196,12 @@ function drawHints(now) {
       if (nr) {
         const dd = dist(nr, h), a = Math.atan2(h.y - nr.y, h.x - nr.x);
         const edge = { x: nr.x + Math.cos(a) * Math.min(dd, S.L), y: nr.y + Math.sin(a) * Math.min(dd, S.L) };
-        dashed(nr, edge, 'rgba(79,120,179,0.6)', 0.35, 0);
-        if (dd > S.L) dashed(edge, h, 'rgba(224,83,79,0.8)', 0.4, 0);
+        dashed(nr, edge, 'rgba(47,99,176,0.6)', 0.35, 0);
+        if (dd > S.L) dashed(edge, h, 'rgba(224,68,63,0.8)', 0.4, 0);
       }
       if (h.kind === 'hub') {                           // 脈打つ赤い輪 = このハブを動かす
         const k = 2.6 + Math.sin(now * 5) * 0.4;
-        ctx.strokeStyle = 'rgba(224,83,79,0.85)'; ctx.lineWidth = 0.3; ctx.setLineDash([0.9, 0.7]);
+        ctx.strokeStyle = 'rgba(224,68,63,0.85)'; ctx.lineWidth = 0.3; ctx.setLineDash([0.9, 0.7]);
         circle(h.x, h.y, k); ctx.stroke(); ctx.setLineDash([]);
       }
     }
@@ -1142,16 +1212,18 @@ function drawHints(now) {
     const p = snapSpot(p0);
     const okPos = hubPosValid(p, null), src = okPos ? hintSource(p, null) : null;
     const good = okPos && !!src;
-    if (src) dashed(src, p, 'rgba(79,120,179,0.6)', 0.35, now * 4);
-    else if (okPos) { const nr = nearestReach(p, null); if (nr) dashed(nr, p, 'rgba(224,83,79,0.6)', 0.35, 0); }
+    if (src) dashed(src, p, 'rgba(47,99,176,0.6)', 0.35, now * 4);
+    else if (okPos) { const nr = nearestReach(p, null); if (nr) dashed(nr, p, 'rgba(224,68,63,0.6)', 0.35, 0); }
     ctx.globalAlpha = 0.5; drawRange(p, good ? 1 : 0.4); drawHub(p, 1, !good); ctx.globalAlpha = 1;
   }
 }
 function drawHub(n, alpha, bad) {
   ctx.globalAlpha *= alpha;
   const building = n.build > 0;
-  ctx.fillStyle = C.hub; circle(n.x, n.y, CFG.hubR); ctx.fill();
-  ctx.strokeStyle = bad ? C.bad : C.hubLine; ctx.lineWidth = building ? 0.28 : 0.4;
+  const pop = n.pop > 0 ? Math.sin(n.pop * Math.PI) * 0.18 : 0;   // 建ち上がった瞬間に小さく弾む
+  if (!building) shadowOf(n.x, n.y, CFG.hubR * (1 + pop), CFG.hubR * 0.8);
+  ctx.fillStyle = C.hub; circle(n.x, n.y, CFG.hubR * (1 + pop)); ctx.fill();
+  ctx.strokeStyle = bad ? C.bad : C.hubLine; ctx.lineWidth = building ? 0.28 : 0.5;
   if (building) ctx.setLineDash([0.6, 0.5]);
   ctx.stroke(); ctx.setLineDash([]);
   if (n.big) {                         // 範囲拡大を使ったハブ: 外側にもう 1 本の輪 (もう広げられない印)
@@ -1161,8 +1233,23 @@ function drawHub(n, alpha, bad) {
     const f = 1 - n.build / CFG.buildT;
     ctx.strokeStyle = C.hubLine; ctx.lineWidth = 0.35;
     ctx.beginPath(); ctx.arc(n.x, n.y, 0.75, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * f); ctx.stroke();
-  } else { ctx.fillStyle = bad ? C.bad : C.hubLine; circle(n.x, n.y, 0.45); ctx.fill(); }
+  } else { ctx.fillStyle = bad ? C.bad : C.hubLine; circle(n.x, n.y, 0.55); ctx.fill(); }
   ctx.globalAlpha /= alpha;
+}
+// 手応え (2026-09-25): 届けた家から荷物の色の輪が広がって消える・ハブが建ち上がると青い輪が広がる。時間だけで決まる (乱数なし)
+function drawFx() {
+  ctx.lineWidth = 0.35;
+  for (const h of S.houses) if (h.ding > 0) {
+    const k = 1 - h.ding;               // 0 → 1
+    ctx.strokeStyle = KINDS[h.dingKind || 'mail'].line; ctx.globalAlpha = h.ding * 0.9;
+    circle(h.x, h.y - 0.3, 1.8 + easeOut(k) * 2.6); ctx.stroke();
+  }
+  for (const n of S.hubs) if (n.pop > 0) {
+    const k = 1 - n.pop;
+    ctx.strokeStyle = C.hubLine; ctx.globalAlpha = n.pop * 0.8;
+    circle(n.x, n.y, CFG.hubR + easeOut(k) * 3.2); ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
 }
 // 供給元: 屋根の色が荷物の色。横に荷物の山 (この場所から出る荷物の見本)。未接続は薄く
 function drawSource(s) {
@@ -1170,6 +1257,7 @@ function drawSource(s) {
   const sz = nodeR(s), k = KINDS[s.goods];
   const prevA = ctx.globalAlpha;
   ctx.globalAlpha = prevA * age * (s.reach ? 1 : 0.55);
+  shadowOf(s.x, s.y + 0.2, sz * 1.25, sz * 0.95);
   ctx.fillStyle = C.wh; rr(s.x - sz, s.y - sz, sz * 2, sz * 2, 0.7); ctx.fill();
   ctx.strokeStyle = C.whLine; ctx.lineWidth = 0.4; ctx.stroke();
   ctx.fillStyle = C.whLine; ctx.fillRect(s.x - 0.9, s.y + 0.3, 1.8, sz - 0.3);   // 戸口
@@ -1210,19 +1298,20 @@ function drawHouse(h, served) {
   // 仮のハブで届くようになる家 (今は届かない家だけ)
   const willServe = !served && preview && preview.ok && dist(preview, h) <= (preview.r || S.R) + CFG.houseHalf && !crossesZone(preview, h);
   ctx.save(); ctx.translate(h.x, h.y); ctx.scale(k, k);
+  if (served || willServe) shadowOf(0, 0.2, 1.45, 1.15);
   if (served || willServe) {
     ctx.fillStyle = C.house; rr(-1.2, -0.9, 2.4, 2.1, 0.5); ctx.fill();
-    ctx.strokeStyle = C.houseLine; ctx.lineWidth = 0.25; ctx.stroke();
+    ctx.strokeStyle = C.houseLine; ctx.lineWidth = 0.28; ctx.stroke();
     ctx.fillStyle = C.roof;
   } else {                             // 届かない家: 色を抜いて点線の枠
-    ctx.fillStyle = '#ece6da'; rr(-1.2, -0.9, 2.4, 2.1, 0.5); ctx.fill();
-    ctx.strokeStyle = '#a89d8c'; ctx.lineWidth = 0.22; ctx.setLineDash([0.5, 0.4]); ctx.stroke(); ctx.setLineDash([]);
-    ctx.fillStyle = '#d3cbbd';
+    ctx.fillStyle = '#f1ede6'; rr(-1.2, -0.9, 2.4, 2.1, 0.5); ctx.fill();
+    ctx.strokeStyle = '#968b7a'; ctx.lineWidth = 0.22; ctx.setLineDash([0.5, 0.4]); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = '#cdc3b3';
   }
   ctx.beginPath(); ctx.moveTo(-1.45, -0.8); ctx.lineTo(0, -1.9); ctx.lineTo(1.45, -0.8); ctx.closePath(); ctx.fill();
   ctx.restore();
   if (willServe) {                     // 青い輪 = このハブで届くようになる
-    ctx.strokeStyle = 'rgba(79,120,179,0.85)'; ctx.lineWidth = 0.3; circle(h.x, h.y, 2.4); ctx.stroke();
+    ctx.strokeStyle = 'rgba(47,99,176,0.85)'; ctx.lineWidth = 0.3; circle(h.x, h.y, 2.4); ctx.stroke();
   }
   // 荷物の山 (家の右横・色は頼んだ荷物の種類) = 家が待っているもの。届いた瞬間に消える (同じ色を抱えたドローンが近づいてくるのが合図)
   h.orders.forEach((o, i) => {
@@ -1231,7 +1320,7 @@ function drawHouse(h, served) {
   });
   if (h.overT > 0) {                 // 縮む輪
     const r = 6.5 - (6.5 - 2.2) * (h.overT / CFG.G);
-    ctx.strokeStyle = 'rgba(224,83,79,0.9)'; ctx.lineWidth = 0.35; circle(h.x, h.y, r); ctx.stroke();
+    ctx.strokeStyle = 'rgba(224,68,63,0.9)'; ctx.lineWidth = 0.35; circle(h.x, h.y, r); ctx.stroke();
   }
 }
 function drawPackage(x, y, s, kind) {
@@ -1302,8 +1391,8 @@ function drawDroneIcon(x, y, s) {
 function drawRangeToolIcon(x, y, s, alpha) {
   const a = alpha == null ? 1 : alpha;
   ctx.fillStyle = C.range + (0.14 * a) + ')'; circle(x, y, 2.3 * s); ctx.fill();
-  ctx.strokeStyle = 'rgba(79,120,179,' + (0.9 * a) + ')'; ctx.lineWidth = 0.22; ctx.stroke();
-  ctx.strokeStyle = 'rgba(79,120,179,' + (0.5 * a) + ')'; ctx.lineWidth = 0.15; ctx.setLineDash([0.5, 0.4]);
+  ctx.strokeStyle = 'rgba(47,99,176,' + (0.9 * a) + ')'; ctx.lineWidth = 0.22; ctx.stroke();
+  ctx.strokeStyle = 'rgba(47,99,176,' + (0.5 * a) + ')'; ctx.lineWidth = 0.15; ctx.setLineDash([0.5, 0.4]);
   circle(x, y, 1.45 * s); ctx.stroke(); ctx.setLineDash([]);
   ctx.globalAlpha *= a; drawHubIcon(x, y, 0.95 * s); ctx.globalAlpha /= a;
 }
@@ -1313,10 +1402,10 @@ function drawToolDrag(now) {
   const p = { x: ptr.x, y: ptr.y }, h = toolTarget(p), over = hitNode(p, CFG.snap);
   if (h) {
     ctx.fillStyle = C.range + '0.10)'; circle(h.x, h.y, CFG.bigR); ctx.fill();
-    ctx.strokeStyle = 'rgba(79,120,179,0.9)'; ctx.lineWidth = 0.4; ctx.setLineDash([1.2, 0.8]); ctx.lineDashOffset = -now * 3;
+    ctx.strokeStyle = 'rgba(47,99,176,0.9)'; ctx.lineWidth = 0.4; ctx.setLineDash([1.2, 0.8]); ctx.lineDashOffset = -now * 3;
     ctx.stroke(); ctx.setLineDash([]); ctx.lineDashOffset = 0;
   } else if (over && p.y >= HUD_H) {
-    ctx.strokeStyle = 'rgba(224,83,79,0.85)'; ctx.lineWidth = 0.35; ctx.setLineDash([0.9, 0.7]);
+    ctx.strokeStyle = 'rgba(224,68,63,0.85)'; ctx.lineWidth = 0.35; ctx.setLineDash([0.9, 0.7]);
     circle(over.x, over.y, nodeR(over) + 1.2); ctx.stroke(); ctx.setLineDash([]);
   }
   ctx.fillStyle = 'rgba(0,0,0,0.14)'; circle(p.x + 0.5, p.y + 0.9, 2.2); ctx.fill();   // 影 = 持ち上がっている
@@ -1324,7 +1413,8 @@ function drawToolDrag(now) {
 }
 function drawHUD() {
   // 上の帯
-  ctx.fillStyle = 'rgba(255,255,255,0.55)'; ctx.fillRect(0, 0, W, 6.2);
+  ctx.fillStyle = 'rgba(40,66,30,0.10)'; ctx.fillRect(0, 6.2, W, 0.35);   // 帯の下の影
+  ctx.fillStyle = 'rgba(255,255,255,0.93)'; ctx.fillRect(0, 0, W, 6.2);
   // 届けた数
   // 届けた数: 現れている供給元の荷物を3色重ねた印 (どの荷物でも届けば1つ増える)。届いた瞬間は数字がその色でふくらむ
   const kinds = ['mail', 'veg', 'milk'].filter(k => { const src = srcOf(k); return src && src.on; });
@@ -1337,7 +1427,7 @@ function drawHUD() {
   const carrying = ptr && ptr.drag && ptr.mode === 'move' && ptr.hit && ptr.hit.kind === 'hub';
   if (carrying) {
     const over = ptr.y < HUD_H;
-    ctx.fillStyle = over ? 'rgba(79,120,179,0.35)' : 'rgba(79,120,179,0.12)';
+    ctx.fillStyle = over ? 'rgba(47,99,176,0.35)' : 'rgba(47,99,176,0.12)';
     rr(12.5, 0.6, 9.5, 5.0, 1.2); ctx.fill();
     ctx.strokeStyle = C.hubLine; ctx.lineWidth = 0.25; ctx.setLineDash([0.8, 0.6]); ctx.stroke(); ctx.setLineDash([]);
     const k = 1.3 + (over ? 0.5 : 0.25 + Math.sin(performance.now() / 120) * 0.2);
@@ -1391,13 +1481,13 @@ function drawToolIcon(kind, x, y, now) {
     const g = ease((ph - 0.25) / 0.4), r = 3.0 + 1.6 * g;
     ctx.strokeStyle = C.range + '0.5)'; ctx.lineWidth = 0.15; ctx.setLineDash([0.6, 0.5]); circle(0, 0, 3.0); ctx.stroke(); ctx.setLineDash([]);   // 元の大きさ
     ctx.fillStyle = C.range + '0.12)'; circle(0, 0, r); ctx.fill();
-    ctx.strokeStyle = 'rgba(79,120,179,' + (0.35 + 0.55 * g) + ')'; ctx.lineWidth = 0.22 + 0.25 * g; ctx.stroke();
+    ctx.strokeStyle = 'rgba(47,99,176,' + (0.35 + 0.55 * g) + ')'; ctx.lineWidth = 0.22 + 0.25 * g; ctx.stroke();
     drawHubIcon(0, 0, 1.3);
     ctx.fillStyle = C.house;                            // 広がると届くようになる家
     const hx = 3.9, hy = 0.4;
     rr(hx - 0.7, hy - 0.5, 1.4, 1.2, 0.3); ctx.fill(); ctx.strokeStyle = C.houseLine; ctx.lineWidth = 0.15; ctx.stroke();
     ctx.fillStyle = C.roof; ctx.beginPath(); ctx.moveTo(hx - 0.85, hy - 0.45); ctx.lineTo(hx, hy - 1.1); ctx.lineTo(hx + 0.85, hy - 0.45); ctx.closePath(); ctx.fill();
-    if (g > 0.95) { ctx.strokeStyle = 'rgba(79,120,179,0.85)'; ctx.lineWidth = 0.2; circle(hx, hy, 1.4); ctx.stroke(); }
+    if (g > 0.95) { ctx.strokeStyle = 'rgba(47,99,176,0.85)'; ctx.lineWidth = 0.2; circle(hx, hy, 1.4); ctx.stroke(); }
   } else {
     const ph = (now % 2.4) / 2.4;                       // 0〜0.3 届かない赤 → 0.3〜0.7 伸びる → 残り 青くつながったまま
     const A = { x: -5.2, y: 1.4 }, B = { x: 5.2, y: -1.6 };
@@ -1414,7 +1504,7 @@ function drawToolIcon(kind, x, y, now) {
   ctx.restore();
 }
 function drawReward(now) {
-  ctx.fillStyle = 'rgba(255,255,255,0.6)'; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = 'rgba(255,255,255,0.7)'; ctx.fillRect(0, 0, W, H);
   // 週の区切りの印
   ctx.strokeStyle = C.ink; ctx.lineWidth = 0.5; circle(50, 10, 2.4); ctx.stroke();
   text(String(S.week), 50, 10.1, 3.2, C.ink, 'center', true);
@@ -1425,8 +1515,9 @@ function drawReward(now) {
   // 2択: ドローン / 道具
   for (const k in CARD) {
     const c = CARD[k];
+    ctx.fillStyle = 'rgba(40,66,30,0.18)'; rr(c.x - c.w / 2 + 0.4, c.y - c.h / 2 + 0.7, c.w, c.h, 1.5); ctx.fill();   // 札の影
     ctx.fillStyle = '#ffffff'; rr(c.x - c.w / 2, c.y - c.h / 2, c.w, c.h, 1.5); ctx.fill();
-    ctx.strokeStyle = C.hubLine; ctx.lineWidth = 0.35; ctx.stroke();
+    ctx.strokeStyle = C.hubLine; ctx.lineWidth = 0.4; ctx.stroke();
     if (k === 'drone') { drawDroneIcon(c.x, c.y - 1.5, 2.6); text('+1', c.x, c.y + 5.2, 3.6, C.ink, 'center', true); }
     else drawToolIcon(S.rewardTool, c.x, c.y - 0.5, now);
   }
@@ -1448,8 +1539,8 @@ function drawMiniHouse(x, y, served) { // 小窓用の家 (本編の drawHouse �
     ctx.fillStyle = C.house; rr(-1.2, -0.9, 2.4, 2.1, 0.5); ctx.fill();
     ctx.strokeStyle = C.houseLine; ctx.lineWidth = 0.25; ctx.stroke(); ctx.fillStyle = C.roof;
   } else {
-    ctx.fillStyle = '#ece6da'; rr(-1.2, -0.9, 2.4, 2.1, 0.5); ctx.fill();
-    ctx.strokeStyle = '#a89d8c'; ctx.lineWidth = 0.22; ctx.setLineDash([0.5, 0.4]); ctx.stroke(); ctx.setLineDash([]); ctx.fillStyle = '#d3cbbd';
+    ctx.fillStyle = '#f1ede6'; rr(-1.2, -0.9, 2.4, 2.1, 0.5); ctx.fill();
+    ctx.strokeStyle = '#968b7a'; ctx.lineWidth = 0.22; ctx.setLineDash([0.5, 0.4]); ctx.stroke(); ctx.setLineDash([]); ctx.fillStyle = '#cdc3b3';
   }
   ctx.beginPath(); ctx.moveTo(-1.45, -0.8); ctx.lineTo(0, -1.9); ctx.lineTo(1.45, -0.8); ctx.closePath(); ctx.fill();
   ctx.restore();
@@ -1491,7 +1582,7 @@ function drawInfoPanel1(now) {
   for (let i = 0; i < n; i++) drawPackage(house.x + 2.0 + (i % 3) * 1.15, house.y + 0.6 - Math.floor(i / 3) * 1.15, 0.95, kinds[i]);
   if (t >= 2.3) {                      // 縮む輪 (本編と同じ)
     const r = 6.5 - (6.5 - 2.2) * clamp01((t - 2.3) / 1.2);
-    ctx.strokeStyle = 'rgba(224,83,79,0.9)'; ctx.lineWidth = 0.35; circle(house.x, house.y, r); ctx.stroke();
+    ctx.strokeStyle = 'rgba(224,68,63,0.9)'; ctx.lineWidth = 0.35; circle(house.x, house.y, r); ctx.stroke();
   }
   if (t >= 3.5) {                      // 終了: 暗くなって赤い×
     ctx.fillStyle = 'rgba(52,58,72,0.5)'; ctx.fillRect(-INFO_PANEL.w, -INFO_PANEL.h, INFO_PANEL.w * 2, INFO_PANEL.h * 2);
@@ -1514,7 +1605,7 @@ function drawInfoPanel2(now) {
     drawMiniRange(A.x, A.y, 5.4, 1);
     drawHub(A, lifted ? 0.4 : 1, false);
     if (hold > 0.15 && !lifted) {      // 長押しの進み具合の輪 (本編と同じ)
-      ctx.strokeStyle = 'rgba(79,120,179,0.9)'; ctx.lineWidth = 0.35;
+      ctx.strokeStyle = 'rgba(47,99,176,0.9)'; ctx.lineWidth = 0.35;
       ctx.beginPath(); ctx.arc(A.x, A.y, CFG.hubR + 0.9, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * hold); ctx.stroke();
     }
     if (lifted) {                      // 持ち上がったハブ (影つき) が指についてくる
@@ -1534,7 +1625,7 @@ function drawInfo(now) {
   [drawInfoPanel0, drawInfoPanel1, drawInfoPanel2].forEach((fn, i) => {
     const px = P.xs[i];
     ctx.fillStyle = C.grass; rr(px - P.w / 2, P.y - P.h / 2, P.w, P.h, 1.2); ctx.fill();
-    ctx.strokeStyle = 'rgba(79,120,179,0.35)'; ctx.lineWidth = 0.2; ctx.stroke();
+    ctx.strokeStyle = 'rgba(47,99,176,0.35)'; ctx.lineWidth = 0.2; ctx.stroke();
     ctx.save(); ctx.beginPath(); rr(px - P.w / 2, P.y - P.h / 2, P.w, P.h, 1.2); ctx.clip();
     ctx.translate(px, P.y); ctx.lineCap = 'round'; fn(now); ctx.restore();
   });
@@ -1581,7 +1672,7 @@ function drawTownThumb(id, cx, cy, w) {
   ctx.beginPath(); ctx.rect(0, 0, W, H); ctx.clip();
   try {
     setTown(id);
-    drawTerrain();
+    drawTerrain([...TOWN.startHouses.map(([x, y]) => ({ x, y })), { x: TOWN.firstHub[0], y: TOWN.firstHub[1] }]);
     for (const [ax, ay, bx, by, r] of TOWN.zones || []) {
       const z = { a: { x: ax, y: ay }, b: { x: bx, y: by }, x: (ax + bx) / 2, y: (ay + by) / 2, r, kind: 'airport' };
       ctx.fillStyle = C.zone; seaBand(z, 0); ctx.fill();
@@ -1592,8 +1683,8 @@ function drawTownThumb(id, cx, cy, w) {
     const hub = { x: TOWN.firstHub[0], y: TOWN.firstHub[1], kind: 'hub', build: 0, big: false };
     ctx.strokeStyle = C.road; ctx.lineWidth = 0.45; ctx.lineCap = 'round';
     for (const b of [src[1], hub]) { ctx.beginPath(); ctx.moveTo(src[0].x, src[0].y); ctx.lineTo(b.x, b.y); ctx.stroke(); }
-    drawRange(hub, 1, CFG.R);
-    for (const [x, y] of TOWN.startHouses) drawMiniHouse(x, y, true);
+    circle(hub.x, hub.y, CFG.R); ctx.fillStyle = C.range + '0.11)'; ctx.fill(); ctx.strokeStyle = C.range + '0.6)'; ctx.lineWidth = 0.22; ctx.stroke();   // 本編と同じ、つながった範囲の見え方
+    for (const [x, y] of TOWN.startHouses) drawMiniHouse(x, y, [...src.slice(0, 2), hub].some(n => Math.hypot(n.x - x, n.y - y) <= CFG.R + CFG.houseHalf));   // 最初から届かない家は届かない見た目
     for (const s of src) drawSource(s);
     drawHub(hub, 1, false);
   } finally { ctx.restore(); [TOWN_ID, TOWN, SEA, BEST_KEY] = keep; }
@@ -1634,10 +1725,41 @@ function drawMenuLogo(now) {
   text(a, tx, LOGO.y + 0.15, LOGO.size, C.ink, 'left', true);
   text(b, tx + wa, LOGO.y + 0.15, LOGO.size, C.hubLine, 'left', true);
 }
+// 一覧の背景の飾り (2026-09-25): 下の空いた所に川と木立、上の角に木立。位置は決まっている (乱数なし)。町の絵・名前・記録の行にかけない
+const MENU_RIVER = [[-2, 50.5], [22, 44], [40, 56], [62, 47.5], [80, 44], [102, 51]];
+function drawMenuDecor() {
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  const path = () => { ctx.beginPath(); ctx.moveTo(MENU_RIVER[0][0], MENU_RIVER[0][1]);
+    for (let i = 1; i < MENU_RIVER.length; i++) { const [x0, y0] = MENU_RIVER[i - 1], [x1, y1] = MENU_RIVER[i]; ctx.bezierCurveTo((x0 + x1) / 2, y0, (x0 + x1) / 2, y1, x1, y1); } };
+  path(); ctx.strokeStyle = C.water2; ctx.lineWidth = 3.7; ctx.stroke();
+  ctx.strokeStyle = C.water; ctx.lineWidth = 3.2; ctx.stroke();
+  ctx.strokeStyle = 'rgba(255,255,255,0.3)'; ctx.lineWidth = 0.25; ctx.setLineDash([2.2, 3.4]); ctx.stroke(); ctx.setLineDash([]);
+  for (let g = 0; g < 16; g++) {
+    const top = g < 6, cx = top ? [4, 14, 24, 76, 88, 97][g] : 3 + hash3(7, g, 1) * 94, cy = top ? 4 + hash3(7, g, 2) * 7 : 43.5 + hash3(7, g, 2) * 11;
+    if (top && cx > 26 && cx < 74) continue;
+    for (let i = 0; i < 5; i++) {
+      const a = hash3(7, g * 16 + i, 4) * Math.PI * 2, d = Math.sqrt(hash3(7, g * 16 + i, 5)) * 2.4;
+      const x = cx + Math.cos(a) * d, y = cy + Math.sin(a) * d * 0.8, r = 0.7 + hash3(7, g * 16 + i, 6) * 0.4;
+      if (!top && (y < 43 || Math.abs(y - (46 + 3 * Math.sin(x / 9))) < 0)) continue;
+      if (MENU_CARDS.some(c => Math.abs(x - c.x) < c.w / 2 + 2 && y < c.y + c.h / 2 + 6.5)) { if (!top) continue; }
+      if (menuRiverDist(x, y) < 3) continue;
+      shadowOf(x, y, r * 0.95, r * 0.7);
+      ctx.fillStyle = C.treeDark; circle(x, y + 0.12, r); ctx.fill();
+      ctx.fillStyle = C.tree; circle(x - 0.08, y - 0.05, r * 0.86); ctx.fill();
+      ctx.fillStyle = C.treeHi; circle(x - r * 0.3, y - r * 0.32, r * 0.36); ctx.fill();
+    }
+  }
+}
+function menuRiverDist(x, y) {         // 飾りの川までのおおよその距離 (縦方向)
+  for (let i = 1; i < MENU_RIVER.length; i++) {
+    const [x0, y0] = MENU_RIVER[i - 1], [x1, y1] = MENU_RIVER[i];
+    if (x >= x0 && x <= x1) { const k = (x - x0) / (x1 - x0), e = k * k * (3 - 2 * k); return Math.abs(y - (y0 + (y1 - y0) * e)); }
+  }
+  return 99;
+}
 function drawMenu(now) {
   ctx.fillStyle = C.grass; ctx.fillRect(0, 0, W, H);
-  ctx.fillStyle = C.grass2;
-  for (const [x, y, r] of [[8, 50, 10], [93, 8, 9], [62, 52, 8], [30, 5, 7]]) { circle(x, y, r); ctx.fill(); }
+  drawMenuDecor();
   drawMenuDrones(now);
   drawMenuLogo(now);
   // 開く順の矢印 (町と町のあいだ)
@@ -1652,7 +1774,7 @@ function drawMenu(now) {
     ctx.fillStyle = 'rgba(40,50,40,0.16)'; rr(c.x - c.w / 2 - 0.3, c.y - c.h / 2 + 0.2, c.w + 1.6, c.h + 1.6, 1.4); ctx.fill();   // 影
     ctx.fillStyle = '#ffffff'; rr(c.x - c.w / 2 - 0.8, y - c.h / 2 - 0.8, c.w + 1.6, c.h + 1.6, 1.4); ctx.fill();                    // 白い額
     if (fresh) {                       // 開いたばかりの町: 縁が青く脈打つ
-      ctx.strokeStyle = 'rgba(79,120,179,' + (0.55 + 0.4 * Math.sin(now * 5)) + ')'; ctx.lineWidth = 0.55; ctx.stroke();
+      ctx.strokeStyle = 'rgba(47,99,176,' + (0.55 + 0.4 * Math.sin(now * 5)) + ')'; ctx.lineWidth = 0.55; ctx.stroke();
     }
     drawTownThumb(c.id, c.x, y, c.w);
     if (open) {
@@ -1680,8 +1802,14 @@ function drawMenu(now) {
 }
 function drawOver(now) {
   const a = Math.min(1, S.overT / 0.6), L = overLayout();
-  ctx.fillStyle = 'rgba(52,58,72,' + (0.55 * a) + ')'; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = 'rgba(40,48,62,' + (0.5 * a) + ')'; ctx.fillRect(0, 0, W, H);
   ctx.globalAlpha = a;
+  { const top = L.num - 6.8, bot = L.btnY + 5.6, k = 0.94 + 0.06 * easeOut(S.overT / 0.35);   // 盤 (2026-09-25): 数字とボタンを 1 枚の板にまとめる
+    ctx.save(); ctx.translate(50, (top + bot) / 2); ctx.scale(k, k); ctx.translate(-50, -(top + bot) / 2);
+    ctx.fillStyle = 'rgba(0,0,0,0.25)'; rr(33.4, top + 0.7, 34, bot - top, 2.2); ctx.fill();
+    ctx.fillStyle = '#2b3950'; rr(33, top, 34, bot - top, 2.2); ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.12)'; ctx.lineWidth = 0.25; ctx.stroke();
+    ctx.restore(); }
   drawPackage(50 - 4.5, L.num, 4.2, 'mail');
   text(String(S.delivered), 50 - 1.2, L.num + 0.2, 8, '#ffffff', 'left', true);
   // 最高記録: 星と数字。今回が最高なら金色でふくらむ (数字は同じ値)。過去の記録が上なら白く小さく
@@ -1709,22 +1837,24 @@ function drawOver(now) {
   // やり直し / 一覧へ (丸の中の印)
   for (const k of ['again', 'list']) {
     const b = overBtn(k);
-    ctx.strokeStyle = 'rgba(255,255,255,0.45)'; ctx.lineWidth = 0.25; circle(b.x, b.y, b.r); ctx.stroke();
+    ctx.fillStyle = k === 'again' ? C.hubLine : 'rgba(255,255,255,0.14)'; circle(b.x, b.y, b.r); ctx.fill();   // やり直しを主に
     if (k === 'again') drawAgainIcon(b.x, b.y, 0.72, '#ffffff'); else drawListIcon(b.x, b.y, 0.95, '#ffffff');
   }
   ctx.globalAlpha = 1;
 }
 function draw(now) {
   ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.fillStyle = MENU ? '#b9d2a6' : TOWN.letterbox; ctx.fillRect(0, 0, cv.width, cv.height);
+  ctx.fillStyle = MENU ? '#a9c98f' : TOWN.letterbox; ctx.fillRect(0, 0, cv.width, cv.height);
   ctx.setTransform(scale, 0, 0, scale, ox, oy);
   ctx.save(); ctx.beginPath(); ctx.rect(0, 0, W, H); ctx.clip();
   if (MENU) { drawMenu(now); if (S.info) drawInfo(now); ctx.restore(); return; }
-  drawTerrain();
+  drawTerrain([...S.houses, ...S.hubs, ...S.sources.filter(s => s.on)]);
   drawZones();
-  // サービス範囲 (供給元も受け持つ)
-  for (const s of S.sources) if (s.on) drawRange(s, s.reach ? 1 : 0.35);
-  for (const h of S.hubs) drawRange(h, h.reach ? 1 : (h.build > 0 ? 0.35 + 0.5 * (1 - h.build / CFG.buildT) : 0.35));
+  // サービス範囲 (供給元も受け持つ)。つながっているものは 1 枚の面、それ以外は 1 つずつ点線で
+  drawCoverage([...S.sources.filter(s => s.on && s.reach), ...S.hubs.filter(h => h.reach)]);
+  for (const s of S.sources) if (s.on && !s.reach) drawRange(s, 0.45);
+  for (const h of S.hubs) if (!h.reach) drawRange(h, h.build > 0 ? 0.45 + 0.5 * (1 - h.build / CFG.buildT) : 0.45);
+  drawFx();
   drawEdges();
   drawHints(now);
   computePreview();
@@ -1734,7 +1864,7 @@ function draw(now) {
   const hf = holdFrac();               // 長押しの進み具合: 輪が満ちると持ち上がる
   if (hf > 0.15) {
     const h = ptr.hit;
-    ctx.strokeStyle = 'rgba(79,120,179,0.9)'; ctx.lineWidth = 0.35;
+    ctx.strokeStyle = 'rgba(47,99,176,0.9)'; ctx.lineWidth = 0.35;
     ctx.beginPath(); ctx.arc(h.x, h.y, CFG.hubR + 0.9, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * hf); ctx.stroke();
   }
   drawDrones(now);
